@@ -190,11 +190,19 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
     client = FPLClient()
 
+    # Element count goes into every run-log entry: the player universe
+    # grows through the transfer window, and we want to watch it move.
+    try:
+        n_elements = len(client.bootstrap()["elements"])
+    except Exception:
+        n_elements = None
+
     try:
         gw, deadline = _next_deadline(client)
     except Exception as exc:
         _alert(0, f"could not read next deadline: {exc!r}")
-        _log_run({"gw": None, "action": "failed-no-deadline", "error": repr(exc)})
+        _log_run({"gw": None, "action": "failed-no-deadline", "error": repr(exc),
+                  "elements": n_elements})
         return 2
 
     now = datetime.now(timezone.utc)
@@ -202,6 +210,7 @@ def main() -> int:
         if now < deadline - timedelta(hours=WINDOW_HOURS) or now >= deadline:
             _log_run({
                 "gw": gw, "action": "skip-outside-window",
+                "elements": n_elements,
                 "deadline": deadline.isoformat(),
                 "window_opens": (deadline - timedelta(hours=WINDOW_HOURS)).isoformat(),
             })
@@ -210,7 +219,7 @@ def main() -> int:
             return 0
         if _has_snapshot(gw):
             _log_run({"gw": gw, "action": "skip-already-exists",
-                      "deadline": deadline.isoformat()})
+                      "elements": n_elements, "deadline": deadline.isoformat()})
             log.info("snapshot for gw%d already exists; nothing to do", gw)
             return 0
 
@@ -223,12 +232,13 @@ def main() -> int:
         # The one thing that must never fail, failed. Scream.
         _alert(gw, f"LEDGER SNAPSHOT FAILED for gw{gw}: {exc!r}")
         _log_run({"gw": gw, "action": "failed", "error": repr(exc),
-                  "deadline": deadline.isoformat()})
+                  "elements": n_elements, "deadline": deadline.isoformat()})
         return 2
 
     _log_run({
         "gw": gw, "action": "written", "partial": partial,
         "failures": failures, "ledger_file": path.name,
+        "elements": n_elements,
         "deadline": deadline.isoformat(),
     })
     if partial:

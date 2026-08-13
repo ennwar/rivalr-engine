@@ -55,7 +55,53 @@ def test_partial_flag_and_failures_recorded(tmp_path):
     d = json.loads(p.read_text())
     assert d["partial"] is True
     assert d["failures"] == ["solver: boom"]
-    assert d["coverage"] == {"total_elements": 1, "projected": 0, "unprojected": 1}
+    assert d["coverage"] == {
+        "bootstrap_elements_at_snapshot": 1,
+        "projected": 0,
+        "unprojected": 1,
+    }
+
+
+class StubClient:
+    """Offline stand-in for FPLClient in scoring tests."""
+
+    def __init__(self, live_points: dict[int, int], elements: list[dict]):
+        self._live = live_points
+        self._elements = elements
+
+    def event_live(self, gw):
+        return {
+            "elements": [
+                {"id": pid, "stats": {"total_points": pts}}
+                for pid, pts in self._live.items()
+            ]
+        }
+
+    def bootstrap(self):
+        return {"elements": self._elements}
+
+    def entry_transfers(self, team_id):
+        return []
+
+
+def test_scoring_reports_unrostered_at_snapshot(tmp_path):
+    from rivalr.ledger import score_gw
+
+    # Ledger knows players 1 (projected) and 2 (null). Players 3 and 4
+    # joined after the snapshot; 3 scored, 4 blanked.
+    record_predictions(5, {1: [2.0], 2: None}, {}, ledger_dir=tmp_path)
+    client = StubClient(
+        live_points={1: 2, 2: 0, 3: 6, 4: 0},
+        elements=[{"id": i, "web_name": f"P{i}"} for i in (1, 2, 3, 4)],
+    )
+    result = score_gw(client, 5, ledger_dir=tmp_path)
+
+    unr = result["unrostered_at_snapshot"]
+    assert unr["n"] == 1                      # only the scorer counts
+    assert unr["players"][0] == {"id": 3, "name": "P3", "points": 6}
+    assert unr["total_points_missed"] == 6
+    assert result["unprojected_players"] == 1  # null is counted separately
+    assert result["accuracy"]["All"]["n"] == 1  # only player 1 is scoreable
 
 
 # -- small-league pairwise swing -------------------------------------------

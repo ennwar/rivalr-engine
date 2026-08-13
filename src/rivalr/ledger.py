@@ -90,7 +90,10 @@ def record_predictions(
         "partial": partial,
         "failures": failures or [],
         "coverage": {
-            "total_elements": len(projections),
+            # bootstrap-static element count at snapshot time; scoring
+            # compares this against who actually played to surface players
+            # who registered after the snapshot ("unrostered").
+            "bootstrap_elements_at_snapshot": len(projections),
             "projected": projected,
             "unprojected": len(projections) - projected,
         },
@@ -170,12 +173,36 @@ def score_gw(
 
     counterfactual = _transfer_counterfactual(client, gw, ledger, actuals)
 
+    # Players who scored (non-zero) but have NO ledger entry at all: they
+    # registered after the snapshot. Distinct from nulls (rostered but
+    # unprojectable) - if this is material, the coverage claim is weaker
+    # than the null count suggests.
+    ledger_ids = {int(k) for k in ledger["projections"]}
+    names = {}
+    try:
+        names = {el["id"]: el["web_name"] for el in client.bootstrap()["elements"]}
+    except Exception:
+        log.warning("could not resolve names for unrostered players")
+    unrostered = sorted(
+        (
+            {"id": pid, "name": names.get(pid, f"#{pid}"), "points": pts}
+            for pid, pts in actuals.items()
+            if pid not in ledger_ids and pts != 0
+        ),
+        key=lambda r: -r["points"],
+    )
+
     result = {
         "gw": gw,
         "ledger_file": ledger_path.name,
         "ledger_partial": ledger.get("partial", False),
         "scored_at": datetime.now(timezone.utc).isoformat(),
         "unprojected_players": unprojected,
+        "unrostered_at_snapshot": {
+            "n": len(unrostered),
+            "total_points_missed": sum(r["points"] for r in unrostered),
+            "players": unrostered,
+        },
         "accuracy": table,
         "counterfactual": counterfactual,
     }
@@ -222,6 +249,14 @@ def format_score_table(result: dict) -> str:
     if result.get("unprojected_players"):
         lines.append(f"unprojected players excluded from RMSE: "
                      f"{result['unprojected_players']}")
+    unr = result.get("unrostered_at_snapshot", {})
+    if unr.get("n"):
+        lines.append(
+            f"UNROSTERED AT SNAPSHOT: {unr['n']} scorer(s), "
+            f"{unr['total_points_missed']} pts outside the ledger universe"
+        )
+        for r in unr["players"][:10]:
+            lines.append(f"  {r['name']} ({r['points']} pts)")
     lines.append("")
     lines.append(f"{'Bucket':<9}{'n':>6}{'RMSE':>8}{'MAE':>8}")
     for name in ["Zeros", "Blanks", "Tickers", "Haulers", "All"]:
