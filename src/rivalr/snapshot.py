@@ -42,6 +42,41 @@ log = logging.getLogger("rivalr.snapshot")
 
 WINDOW_HOURS = 4
 RUN_LOG = ledger.LEDGER_DIR / "run_log.jsonl"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _git_publish(gw: int, path: Path, partial: bool) -> bool:
+    """Best-effort: commit + push the new ledger file to origin.
+
+    Never raises and never blocks the snapshot - a failed push is logged
+    (and recorded in the run log by the caller) but the local ledger file
+    is already safe on disk."""
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", *args], cwd=REPO_ROOT,
+            capture_output=True, text=True, timeout=120,
+        )
+
+    try:
+        rel = path.resolve().relative_to(REPO_ROOT)
+        r = run("add", str(rel))
+        if r.returncode:
+            raise RuntimeError(f"git add: {r.stderr.strip()}")
+        msg = f"ledger: gw{gw} snapshot {path.name}"
+        if partial:
+            msg += " (partial)"
+        r = run("commit", "-m",
+                msg + "\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>")
+        if r.returncode:
+            raise RuntimeError(f"git commit: {(r.stdout + r.stderr).strip()}")
+        r = run("push")
+        if r.returncode:
+            raise RuntimeError(f"git push: {r.stderr.strip()}")
+        log.info("ledger pushed to origin: %s", path.name)
+        return True
+    except Exception as exc:
+        log.warning("LEDGER GIT PUSH FAILED (snapshot unaffected): %s", exc)
+        return False
 
 
 def _log_run(entry: dict) -> None:
@@ -235,9 +270,11 @@ def main() -> int:
                   "elements": n_elements, "deadline": deadline.isoformat()})
         return 2
 
+    pushed = _git_publish(gw, path, partial)
     _log_run({
         "gw": gw, "action": "written", "partial": partial,
         "failures": failures, "ledger_file": path.name,
+        "pushed": pushed,
         "elements": n_elements,
         "deadline": deadline.isoformat(),
     })
