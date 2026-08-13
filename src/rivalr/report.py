@@ -75,11 +75,12 @@ def build_brief(
         requested_mode=mode,
     )
 
-    # 4. Ledger snapshot (append-only).
+    # 4. Ledger snapshot (append-only, FULL bootstrap coverage - pool
+    # filtering is a solver concern, never a scoring concern).
     chosen = plans.get(mode) or plans["points"]
     ledger.record_predictions(
         gw,
-        projections,
+        ledger.full_coverage(projections, bootstrap["elements"]),
         recommendation={
             "team_id": team_id,
             "mode": mode,

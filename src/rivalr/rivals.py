@@ -48,6 +48,10 @@ SWORD_MIN_PROJECTION = 4.5  # xPts next GW to qualify as a sword
 
 MAX_RIVALS = 50  # safety cap: this is a mini-league tool, not a 100k scraper
 
+# Below this size, mini-league EO is too quantised to weight by (a 4-team
+# league only has EO steps of 25%); switch to direct pairwise swings.
+SMALL_LEAGUE_SIZE = 15
+
 
 @dataclass
 class ManagerState:
@@ -283,6 +287,7 @@ def build_rivals_report(
         "league_id": league_id,
         "league_name": league_name,
         "league_size": len(managers),
+        "small_league": len(managers) < SMALL_LEAGUE_SIZE,
         "my_entry_id": team_id,
         "my_rank": me.rank,
         "my_total_points": me.total_points,
@@ -296,6 +301,26 @@ def build_rivals_report(
         "available_swords": available_swords[:20],
         "rivals": rivals,
     }
+
+
+def rival_squad(rival: dict) -> set[int]:
+    """A rival's full 15 from a rivals-report entry."""
+    return set(rival.get("shared", [])) | set(rival.get("their_differentials", []))
+
+
+def pairwise_transfer_gain(
+    pid_in: int | None,
+    pid_out: int | None,
+    squad: set[int],
+    proj: dict[int, float],
+) -> float:
+    """Head-to-head swing of one transfer against one rival: points I gain
+    that they don't. Buying a player the rival owns is neutral (their
+    differential is neutralised but no ground is gained); selling a player
+    they own concedes ground."""
+    gain = proj.get(pid_in, 0.0) if pid_in is not None and pid_in not in squad else 0.0
+    loss = proj.get(pid_out, 0.0) if pid_out is not None and pid_out not in squad else 0.0
+    return gain - loss
 
 
 def write_rivals_report(report: dict, path: str | Path = "rivals_report.json") -> Path:

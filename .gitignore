@@ -6,3 +6,6 @@ vendor/
 rivals_report.json
 .pytest_cache/
 dist/
+logs/snapshot_task.log
+logs/predictions/run_log.jsonl
+logs/predictions/ALERT_*.txt

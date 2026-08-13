@@ -131,10 +131,13 @@ def mode_weight(
     target_squad: set[int],
     eo: dict[int, float],
     labels: dict[int, str],
+    small_league: bool = False,
 ) -> float:
+    """small_league: EO is too quantised to weight by (see rivals.py), so
+    only the direct target-ownership terms apply."""
     e = min(eo.get(pid, 0.0), 1.0)
     if mode == "chase":
-        w = 1.0 + CHASE_EO_BONUS * (1.0 - e)
+        w = 1.0 if small_league else 1.0 + CHASE_EO_BONUS * (1.0 - e)
         if pid not in target_squad:
             w += CHASE_TARGET_BOOST
         return w
@@ -142,6 +145,8 @@ def mode_weight(
         w = 1.0
         if pid in target_squad:
             w += DEFEND_OWNED_BOOST
+        if small_league:
+            return w
         if labels.get(pid) == "SHIELD":
             w += DEFEND_SHIELD_BOOST
         if e <= 0.15 and pid not in target_squad:
@@ -265,6 +270,12 @@ def solve_all_modes(
 
     eo = {int(k): v for k, v in rivals_report["effective_ownership"].items()}
     labels = {int(k): v for k, v in rivals_report["classification"].items()}
+    small_league = rivals_report.get("small_league", False)
+    if small_league:
+        log.info(
+            "small league (%s entries): EO weighting off, pairwise swings on",
+            rivals_report.get("league_size", "?"),
+        )
     target_squad: set[int] = set()
     target = None
     if target_id is not None:
@@ -291,7 +302,9 @@ def solve_all_modes(
         _write_projection_csv(
             vendor_data, datasource, elements, projections, xmins,
             next_gw, horizon,
-            weight_fn=lambda pid, m=mode: mode_weight(pid, m, target_squad, eo, labels),
+            weight_fn=lambda pid, m=mode: mode_weight(
+                pid, m, target_squad, eo, labels, small_league
+            ),
         )
         options = {
             **base_options,
@@ -328,7 +341,12 @@ def solve_all_modes(
                 result = solve_multi_period_fpl(data, options)
             solution = result[0] if isinstance(result, list) else result
             plan = _extract_plan(solution, next_gw, horizon, projections)
-            plan["reasoning"] = _reasoning(mode, plan, target, eo, labels, elements)
+            if small_league:
+                plan["reasoning"] = _pairwise_reasoning(
+                    plan, rivals_report, projections, elements
+                )
+            else:
+                plan["reasoning"] = _reasoning(mode, plan, target, eo, labels, elements)
             if target:
                 plan["swing_vs_target"] = _swing_vs_target(
                     plan, target, projections, elements
@@ -356,6 +374,41 @@ def _reasoning(mode, plan, target, eo, labels, elements) -> list[str]:
             bits.append("target owns" if owned else "differential vs target")
         lines.append(", ".join(bits))
     if not plan["transfers_in"]:
+        lines.append("best move is to bank the transfer")
+    return lines
+
+
+def _pairwise_reasoning(plan, rivals_report, projections, elements) -> list[str]:
+    """Small-league mode: per transfer, the direct head-to-head swing
+    against every named rival over the horizon, instead of EO%."""
+    from .rivals import pairwise_transfer_gain, rival_squad
+
+    name = lambda pid: elements[pid]["web_name"] if pid in elements else f"#{pid}"
+    proj_sum = {pid: sum(xs) for pid, xs in projections.items()}
+    rivals_list = rivals_report.get("rivals", [])
+
+    lines: list[str] = []
+    ins = plan["transfers_in"]
+    outs = plan["transfers_out"]
+    pairs = list(zip(outs, ins))
+    pairs += [(None, p) for p in ins[len(outs):]]   # draft mode: no outs
+    per_rival_total: dict[str, float] = {}
+    for pid_out, pid_in in pairs:
+        bits = []
+        for r in rivals_list:
+            first_name = r["name"].split()[0] if r["name"] else str(r["entry_id"])
+            g = pairwise_transfer_gain(pid_in, pid_out, rival_squad(r), proj_sum)
+            per_rival_total[first_name] = per_rival_total.get(first_name, 0.0) + g
+            owns = pid_in in rival_squad(r)
+            bits.append(f"{g:+.1f} vs {first_name}" + (" (owns)" if owns else ""))
+        label = f"IN {name(pid_in)}" + (f" for {name(pid_out)}" if pid_out else "")
+        lines.append(f"{label}: " + ", ".join(bits))
+    if per_rival_total and len(pairs) > 1:
+        lines.append(
+            "total swing: "
+            + ", ".join(f"{v:+.1f} vs {k}" for k, v in per_rival_total.items())
+        )
+    if not ins:
         lines.append("best move is to bank the transfer")
     return lines
 

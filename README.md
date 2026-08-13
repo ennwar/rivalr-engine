@@ -103,9 +103,40 @@ plus our overrides (see `SOLVER_OVERRIDES` in `optimise.py`).
 
 ## Ledger
 
-Every `report` run writes `logs/predictions/gw{N}.json` (never
-overwrites — later runs the same GW get timestamped names). After the GW,
-`rivalr.score` writes `gw{N}_score.json` with RMSE/MAE split into the
-OpenFPL paper's buckets (Zeros 0 pts / Blanks 1-3 / Tickers 4-9 /
-Haulers 10+) and a counterfactual: points from the recommended transfers
-vs the transfers you actually made.
+Snapshots record **every element in bootstrap-static** — players the
+model can't project carry a `null` projection. Pool filtering exists
+only on the solver side; the scoring universe is never shrunk (that
+would bias accuracy in our favour).
+
+Naming: `gw{N}.json` first snapshot, `gw{N}_v2.json`... if one already
+exists (logged loudly, never overwritten). `*_test.json` files are
+plumbing artifacts and are never scored. `rivalr.score` uses the
+highest-versioned real snapshot and reports RMSE/MAE in the OpenFPL
+paper's buckets (Zeros 0 / Blanks 1-3 / Tickers 4-9 / Haulers 10+) plus
+the recommended-vs-actual transfer counterfactual.
+
+## Scheduled pre-deadline snapshot
+
+A Windows Task Scheduler job (`rivalr-snapshot`, hourly) runs:
+
+```bash
+uv run python -m rivalr.snapshot --auto --team <id> --league <id>
+```
+
+It reads the next deadline from the API (`events -> deadline_time`),
+fires once inside the 4h window before it, and guarantees the ledger
+write even if projections, rivals or the solver fail (the entry is then
+flagged `partial` with the failure reasons). Every run — including
+skips — appends to `logs/predictions/run_log.jsonl`; failures also
+write `logs/predictions/ALERT_gw{N}.txt` and attempt a Windows toast.
+The machine must be awake for the window; check the run log after each
+deadline.
+
+## Small leagues
+
+With fewer than 15 entries, mini-league EO is too quantised to weight
+by (4 entries = 25% steps). The engine then drops the EO terms from
+chase/defend and reports direct pairwise swings instead: per transfer,
+the head-to-head points swing against each named rival ("+4.2 vs
+Nicholas"), where buying a player a rival owns is neutral and selling a
+player they own concedes ground.
