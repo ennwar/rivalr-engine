@@ -1,0 +1,31 @@
+[project]
+name = "rivalr"
+version = "0.1.0"
+description = "Local FPL engine: mini-league intelligence, projections, rival-aware optimisation"
+readme = "README.md"
+authors = [
+    { name = "YS Chow", email = "chowyenshiun@gmail.com" }
+]
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "requests>=2.31",
+    # pandas/joblib/xgboost/sklearn pinned to OpenFPL's plug.txt so the
+    # trained model pickles load cleanly.
+    "pandas>=2.3,<2.4",
+    "numpy>=1.26,<3",
+    "joblib==1.5.1",
+    "xgboost==3.0.2",
+    "scikit-learn==1.7.0",
+    # FPL-Optimization-Tools runtime (imported from vendor/, not installed)
+    "highspy>=1.11.0",
+    "fuzzywuzzy>=0.18",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"

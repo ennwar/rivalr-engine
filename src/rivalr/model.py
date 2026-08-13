@@ -1,0 +1,393 @@
+"""Projections: OpenFPL inference as the baseline model. No retraining.
+
+Pipeline (mirrors vendor/OpenFPL/play.ipynb exactly):
+  1. Build the 228-feature vector per (player, future fixture): rolling means
+     over the previous {1,3,5,10,38} gameweeks of FPL stats (element-summary)
+     and Understat stats (player pages + league team data).
+  2. np.nan_to_num -> float32 -> xscaler.transform -> nan_to_num -> float32.
+  3. Slice to the per-position feature subset (models/features.save).
+  4. Predict with all 50 models per position (5 CV folds x 10 candidates),
+     inverse-transform with yscaler (points = y * 33 - 7), take the median.
+
+We run GK/DEF/MID/FWD only. The AM (assistant manager) models and their
+league-rank features are skipped: we project players, not managers, so the
+12 rank columns are left NaN exactly like OpenFPL's own samples.csv does
+for player rows.
+
+Multi-GW horizon: OpenFPL predicts a single GW. For GW n+k we keep the
+player/team form aggregates as of *now* and swap in the opponent block and
+fixture for that GW - double gameweeks sum both fixtures, blanks are 0.
+
+Stable interface:
+    project(player_id, horizon) -> [xPts per gw]
+    project_all(client, horizon) -> {player_id: [xPts per gw]}
+
+If OpenFPL or Understat is unavailable the failure is logged at ERROR and
+we degrade: Understat-only failure -> those features go NaN (scaled like
+OpenFPL's own missing values); OpenFPL-missing -> fall back to the FPL
+site's ep_next, flat across the horizon, so the rest of the engine runs.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from .fetch import FPLClient
+from .understat import Understat
+from . import vendors
+
+log = logging.getLogger("rivalr.model")
+
+WINDOWS = [1, 3, 5, 10, 38]
+POSITIONS = {1: "GK", 2: "DEF", 3: "MID", 4: "FWD"}  # element_type -> OpenFPL dir
+
+# FPL element-summary history key per feature base name.
+FPL_PLAYER_METRICS = {
+    "player fpl points": "total_points",
+    "player minutes played": "minutes",
+    "player influence": "influence",
+    "player creativity": "creativity",
+    "player threat": "threat",
+    "player goals scored": "goals_scored",
+    "player penalties missed": "penalties_missed",
+    "player assists": "assists",
+    "player goals conceded": "goals_conceded",
+    "player own goals": "own_goals",
+    "player saves": "saves",
+    "player penalties saved": "penalties_saved",
+    "player yellow cards": "yellow_cards",
+    "player red cards": "red_cards",
+    "player bps": "bps",
+    "player fpl bonus points": "bonus",
+}
+
+# Understat per-player match key per feature base name.
+US_PLAYER_METRICS = {
+    "player shots": "shots",
+    "player xg": "xG",
+    "player xgchain": "xGChain",
+    "player xgbuildup": "xGBuildup",
+    "player key passes": "key_passes",
+    "player xa": "xA",
+}
+
+# Understat team-history extractors per team-scope metric base name.
+US_TEAM_METRICS = {
+    "goals scored": lambda m: float(m["scored"]),
+    "goals conceded": lambda m: float(m["missed"]),
+    "xg": lambda m: float(m["xG"]),
+    "xga": lambda m: float(m["xGA"]),
+    "deep": lambda m: float(m["deep"]),
+    "deep allowed": lambda m: float(m["deep_allowed"]),
+    "ppda att": lambda m: float(m["ppda"]["att"]),
+    "ppda def": lambda m: float(m["ppda"]["def"]),
+    "ppda allowed att": lambda m: float(m["ppda_allowed"]["att"]),
+    "ppda allowed def": lambda m: float(m["ppda_allowed"]["def"]),
+}
+
+
+def _windowed(values: list[float]) -> dict[int, float]:
+    """Mean over the last N observations for each window; NaN when empty."""
+    out = {}
+    for w in WINDOWS:
+        tail = values[-w:]
+        out[w] = sum(tail) / len(tail) if tail else math.nan
+    return out
+
+
+def _appearance_points(minutes: int) -> int:
+    return 2 if minutes >= 60 else (1 if minutes > 0 else 0)
+
+
+class OpenFPLModel:
+    def __init__(
+        self,
+        client: FPLClient,
+        understat: Understat | None = None,
+    ) -> None:
+        self.client = client
+        bootstrap = client.bootstrap()
+        self._elements = {el["id"]: el for el in bootstrap["elements"]}
+        self._teams = bootstrap["teams"]
+        self._team_name = {t["id"]: t["name"] for t in self._teams}
+        season = int(bootstrap["events"][0]["deadline_time"][:4])
+        self.understat = understat or Understat(season=season, cache_dir=client.cache_dir)
+
+        self._artifacts_loaded = False
+        self._models: dict[str, list] = {}
+        self._xscaler = None
+        self._yscaler = None
+        self._features: dict[str, list[str]] = {}
+        self._feature_order: list[str] = []
+
+        self._us_ready = False
+        self._us_team_hist: dict[str, list[dict]] = {}   # understat title -> history
+        self._us_player_map: dict[int, str] = {}          # fpl id -> understat id
+
+    # -- artifact loading --------------------------------------------------
+
+    def _load_artifacts(self) -> None:
+        if self._artifacts_loaded:
+            return
+        import joblib
+
+        root = vendors.require_openfpl()
+        models_dir = root / "models"
+        self._xscaler = joblib.load(models_dir / "xscaler.save")
+        self._yscaler = joblib.load(models_dir / "yscaler.save")
+        self._features = joblib.load(models_dir / "features.save")
+        self._feature_order = list(self._xscaler.feature_names_in_)
+        if len(self._feature_order) != 228:
+            raise RuntimeError(
+                f"expected 228 scaler features, got {len(self._feature_order)}"
+            )
+        for pos in ["GK", "DEF", "MID", "FWD"]:
+            bundle = []
+            for cv in range(1, 6):
+                cv_dir = models_dir / f"cv{cv}_{pos}"
+                for candidate in sorted(p for p in cv_dir.iterdir() if p.is_dir()):
+                    files = list(candidate.glob("*.joblib"))
+                    if files:
+                        bundle.append(joblib.load(files[0]))
+            if len(bundle) != 50:
+                log.warning("%s: loaded %d models (expected 50)", pos, len(bundle))
+            self._models[pos] = bundle
+        self._artifacts_loaded = True
+        log.info("OpenFPL artifacts loaded (%d models)",
+                 sum(len(v) for v in self._models.values()))
+
+    # -- understat aggregates ----------------------------------------------
+
+    def _load_understat(self) -> None:
+        if self._us_ready:
+            return
+        try:
+            self._us_team_hist = self.understat.teams_data()
+            self._us_player_map = self.understat.map_fpl_players(
+                list(self._elements.values()), self._teams
+            )
+        except Exception:
+            log.error(
+                "UNDERSTAT UNAVAILABLE - proceeding with FPL-only features. "
+                "Team/opponent and player xG features will be NaN.",
+            )
+            self._us_team_hist = {}
+            self._us_player_map = {}
+        self._us_ready = True
+
+    def _team_block(self, fpl_team_id: int, scope: str) -> dict[str, float]:
+        from .understat import FPL_TO_UNDERSTAT_TEAM
+
+        name = self._team_name.get(fpl_team_id, "")
+        title = FPL_TO_UNDERSTAT_TEAM.get(name, name)
+        history = self._us_team_hist.get(title, [])
+        feats: dict[str, float] = {}
+        for base, extract in US_TEAM_METRICS.items():
+            series = [extract(m) for m in history]
+            for w, val in _windowed(series).items():
+                feats[f"{scope} {base} {w}"] = val
+        return feats
+
+    # -- feature building --------------------------------------------------
+
+    def _player_features(self, pid: int) -> dict[str, float]:
+        el = self._elements[pid]
+        history = self.client.element_summary(pid).get("history", [])
+        feats: dict[str, float] = {}
+
+        for base, key in FPL_PLAYER_METRICS.items():
+            series = [float(h[key]) for h in history]
+            for w, val in _windowed(series).items():
+                feats[f"{base} {w}"] = val
+
+        # "relevant fpl points" is defined in the OpenFPL paper, not the repo.
+        # Approximation used here: points from on-pitch contributions only,
+        # i.e. total minus appearance points minus bonus.
+        relevant = [
+            float(h["total_points"]) - _appearance_points(h["minutes"]) - float(h["bonus"])
+            for h in history
+        ]
+        for w, val in _windowed(relevant).items():
+            feats[f"player relevant fpl points {w}"] = val
+
+        us_id = self._us_player_map.get(pid)
+        matches = self.understat.player_matches(us_id) if us_id else []
+        for base, key in US_PLAYER_METRICS.items():
+            series = [float(m.get(key) or 0.0) for m in matches]
+            for w, val in _windowed(series).items():
+                feats[f"{base} {w}"] = val
+
+        status = el.get("status", "a")
+        chance = el.get("chance_of_playing_next_round")
+        if status == "a":
+            avail = 1.0
+        elif status in ("i", "s", "n", "u"):
+            avail = 0.0 if chance is None else chance / 100.0
+        else:
+            avail = (chance if chance is not None else 50) / 100.0
+        feats["status player availability"] = avail
+        return feats
+
+    def _upcoming_fixtures(self, horizon: int) -> tuple[int, dict[int, dict[int, list[dict]]]]:
+        """next_gw, {team_id: {gw: [ {opponent, home} ]}} over the horizon."""
+        next_gw = self.client.next_gw()
+        gws = range(next_gw, min(39, next_gw + horizon))
+        by_team: dict[int, dict[int, list[dict]]] = {}
+        for f in self.client.fixtures():
+            if f.get("event") not in gws or f.get("finished"):
+                continue
+            h, a, gw = f["team_h"], f["team_a"], f["event"]
+            by_team.setdefault(h, {}).setdefault(gw, []).append(
+                {"opponent": a, "home": True}
+            )
+            by_team.setdefault(a, {}).setdefault(gw, []).append(
+                {"opponent": h, "home": False}
+            )
+        return next_gw, by_team
+
+    # -- inference ---------------------------------------------------------
+
+    def _predict_position(self, pos: str, rows: pd.DataFrame) -> np.ndarray:
+        X = rows[self._feature_order].to_numpy()
+        X = np.nan_to_num(X).astype("float32")
+        X = np.nan_to_num(self._xscaler.transform(X)).astype("float32")
+        idx = [self._feature_order.index(f) for f in self._features[pos]]
+        X = X[:, idx]
+        preds = []
+        for model in self._models[pos]:
+            p = model.predict(X)
+            p = self._yscaler.inverse_transform(p.reshape(-1, 1)).reshape(-1)
+            preds.append(p)
+        return np.median(np.vstack(preds), axis=0)
+
+    def default_pool(self) -> list[int]:
+        """Players worth projecting: not marked unavailable/left."""
+        return [
+            el["id"] for el in self._elements.values()
+            if el.get("status") not in ("u", "n")
+        ]
+
+    def project_all(
+        self, horizon: int = 5, pool: list[int] | None = None
+    ) -> dict[int, list[float]]:
+        self._load_artifacts()
+        self._load_understat()
+        pool = pool or self.default_pool()
+        next_gw, fixtures = self._upcoming_fixtures(horizon)
+        gws = list(range(next_gw, min(39, next_gw + horizon)))
+
+        # Opponent blocks are shared across players: precompute per team.
+        opp_block = {t["id"]: self._team_block(t["id"], "opponent") for t in self._teams}
+        own_block = {t["id"]: self._team_block(t["id"], "team") for t in self._teams}
+
+        rows: list[dict] = []
+        meta: list[tuple[int, int]] = []  # (player_id, gw)
+        season_matches: dict[int, int] = {}
+        for pid in pool:
+            el = self._elements.get(pid)
+            if el is None or el["element_type"] not in POSITIONS:
+                continue
+            base = self._player_features(pid)
+            season_matches[pid] = len(self.client.element_summary(pid).get("history", []))
+            base.update(own_block[el["team"]])
+            team_fixtures = fixtures.get(el["team"], {})
+            for gw in gws:
+                for fx in team_fixtures.get(gw, []):
+                    row = dict(base)
+                    row.update(opp_block[fx["opponent"]])
+                    row["_pos"] = POSITIONS[el["element_type"]]
+                    rows.append(row)
+                    meta.append((pid, gw))
+
+        if not rows:
+            return {}
+        df = pd.DataFrame(rows)
+        for col in self._feature_order:
+            if col not in df.columns:
+                df[col] = math.nan  # rank features etc.
+
+        results: dict[int, list[float]] = {
+            pid: [0.0] * len(gws) for pid in pool if pid in self._elements
+        }
+        for pos in ["GK", "DEF", "MID", "FWD"]:
+            mask = df["_pos"] == pos
+            if not mask.any():
+                continue
+            preds = self._predict_position(pos, df[mask])
+            for (pid, gw), val in zip(
+                [m for m, keep in zip(meta, mask.tolist()) if keep], preds
+            ):
+                results[pid][gw - next_gw] += float(val)  # DGW fixtures sum
+
+        return self._cold_start_blend(results, season_matches)
+
+    COLD_START_FULL_TRUST = 5  # season matches before the model stands alone
+
+    def _cold_start_blend(
+        self, results: dict[int, list[float]], season_matches: dict[int, int]
+    ) -> dict[int, list[float]]:
+        """Early-season the FPL history features are empty and the model
+        under-predicts everyone, so blend with the FPL site's ep_next
+        (which carries last-season priors), weighted by matches played:
+        pure ep_next at GW1, pure OpenFPL from ~GW6."""
+        blended_players = 0
+        for pid, xs in results.items():
+            n = season_matches.get(pid, self.COLD_START_FULL_TRUST)
+            w = min(n / self.COLD_START_FULL_TRUST, 1.0)
+            if w >= 1.0:
+                continue
+            ep = float(self._elements[pid].get("ep_next") or 0.0)
+            results[pid] = [round(w * x + (1.0 - w) * ep, 3) for x in xs]
+            blended_players += 1
+        if blended_players:
+            log.info(
+                "cold-start blend applied to %d players (< %d season matches)",
+                blended_players, self.COLD_START_FULL_TRUST,
+            )
+        return results
+
+    def project(self, player_id: int, horizon: int = 5) -> list[float]:
+        return self.project_all(horizon, pool=[player_id]).get(player_id, [])
+
+
+# -- module-level stable interface ----------------------------------------
+
+_default_model: OpenFPLModel | None = None
+
+
+def _fallback_projections(client: FPLClient, horizon: int) -> dict[int, list[float]]:
+    log.error(
+        "OPENFPL UNAVAILABLE - falling back to FPL ep_next, flat across the "
+        "horizon. Projections will be markedly worse. %s", vendors.SETUP_HINT,
+    )
+    bootstrap = client.bootstrap()
+    return {
+        el["id"]: [float(el.get("ep_next") or 0.0)] * horizon
+        for el in bootstrap["elements"]
+    }
+
+
+def project_all(client: FPLClient, horizon: int = 5) -> dict[int, list[float]]:
+    global _default_model
+    try:
+        if _default_model is None or _default_model.client is not client:
+            _default_model = OpenFPLModel(client)
+        return _default_model.project_all(horizon)
+    except FileNotFoundError:
+        return _fallback_projections(client, horizon)
+    except ImportError as exc:
+        log.error("OPENFPL DEPENDENCY MISSING: %s", exc)
+        return _fallback_projections(client, horizon)
+
+
+def project(player_id: int, horizon: int) -> list[float]:
+    """Stable signature: per-GW xPts for one player over the horizon."""
+    global _default_model
+    if _default_model is None:
+        _default_model = OpenFPLModel(FPLClient())
+    return _default_model.project(player_id, horizon)
