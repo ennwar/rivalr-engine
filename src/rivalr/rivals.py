@@ -90,6 +90,25 @@ def fetch_league_entries(client: FPLClient, league_id: int) -> tuple[str, list[d
         if not standings.get("has_next") or len(entries) >= MAX_RIVALS:
             break
         page += 1
+    if not entries:
+        # Pre-season: nobody has scored yet, so members sit in new_entries.
+        new = data.get("new_entries", {}).get("results", [])
+        if new:
+            log.warning(
+                "league %s standings empty (pre-season); using %d new_entries "
+                "with rank/points 0", league_id, len(new),
+            )
+            entries = [
+                {
+                    "entry": r["entry"],
+                    "player_name": f"{r.get('player_first_name', '')} "
+                                   f"{r.get('player_last_name', '')}".strip(),
+                    "entry_name": r.get("entry_name", ""),
+                    "rank": 0,
+                    "total": 0,
+                }
+                for r in new[:MAX_RIVALS]
+            ]
     if len(entries) > MAX_RIVALS:
         log.warning(
             "league %s has more than %d entries; truncating to top %d",

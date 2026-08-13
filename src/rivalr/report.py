@@ -72,6 +72,7 @@ def build_brief(
         target_id=target_id,
         horizon=horizon,
         xmins={pid: e.expected_minutes for pid, e in est.items()},
+        requested_mode=mode,
     )
 
     # 4. Ledger snapshot (append-only).
@@ -211,7 +212,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.mode in ("chase", "defend") and args.target is None:
-        parser.error(f"--mode {args.mode} requires --target <rival entry id>")
+        log.warning(
+            "--mode %s without --target: solving with league-wide terms only "
+            "(pick a target once rival picks are visible)", args.mode,
+        )
 
     logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
     client = FPLClient()

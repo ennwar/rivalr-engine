@@ -236,6 +236,7 @@ def solve_all_modes(
     target_id: int | None,
     horizon: int = 5,
     xmins: dict[int, float] | None = None,
+    requested_mode: str = "points",
 ) -> dict[str, dict | None]:
     """Solve points / chase / defend side by side.
 
@@ -276,6 +277,13 @@ def solve_all_modes(
             target_squad = set(target["shared"]) | set(target["their_differentials"])
 
     modes = ["points"] + (["chase", "defend"] if target else [])
+    if target is None and requested_mode in ("chase", "defend"):
+        # No target: the mode still solves, degraded to its league-wide
+        # terms only (chase: low-EO variance bonus; defend: shield bonus).
+        log.warning(
+            "%s mode without a target: using league-EO terms only", requested_mode
+        )
+        modes.append(requested_mode)
     plans: dict[str, dict | None] = {"points": None, "chase": None, "defend": None}
 
     for mode in modes:
