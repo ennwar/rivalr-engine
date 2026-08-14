@@ -46,6 +46,30 @@ log = logging.getLogger("rivalr.model")
 WINDOWS = [1, 3, 5, 10, 38]
 POSITIONS = {1: "GK", 2: "DEF", 3: "MID", 4: "FWD"}  # element_type -> OpenFPL dir
 
+# Blanks floor bias (docs/backtest_findings.md, 2026-08-14): the model
+# essentially never predicts below ~1.7 for a player who takes the pitch
+# (25th-percentile prediction for played players = 1.72), so projections
+# near that floor carry no real signal - the model cannot distinguish a
+# 1.7 from a blank. We deliberately do NOT de-bias projections: the
+# correction was measured on a backtest without availability flags, and
+# in-season the live flags + expected-minutes scaling attack the same
+# over-prediction (double-correction risk). Revisit at GW8 with the live
+# ledger's own evidence. Until then, flag low-margin projections.
+BLANKS_FLOOR = 1.7
+LOW_CONFIDENCE_MARGIN = 0.5
+
+
+def confidence_margin(next_gw_xpts: float, minutes_factor: float = 1.0) -> float:
+    """Projection minus the expected-minutes-adjusted model floor."""
+    return next_gw_xpts - BLANKS_FLOOR * minutes_factor
+
+
+def is_low_confidence(next_gw_xpts: float, minutes_factor: float = 1.0) -> bool:
+    """True when a projection sits within LOW_CONFIDENCE_MARGIN of the
+    floor - i.e. the number is indistinguishable from the model's
+    default for 'plays but does nothing'."""
+    return confidence_margin(next_gw_xpts, minutes_factor) <= LOW_CONFIDENCE_MARGIN
+
 # FPL element-summary history key per feature base name.
 FPL_PLAYER_METRICS = {
     "player fpl points": "total_points",

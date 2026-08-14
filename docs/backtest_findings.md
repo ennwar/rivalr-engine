@@ -196,6 +196,26 @@ this by construction. No pipeline defect was identified that could
 produce a uniform bias while leaving Tickers/Haulers calibrated. GK's
 post-de-bias residual (n=77) is left open.
 
+### Decisions (2026-08-14)
+
+- **Published benchmark**: any accuracy claim we publish compares Blanks
+  against the honest like-for-like outfield-only benchmark of **1.136**,
+  not Table 4's AM-inflated 1.291.
+- **No de-bias correction applied.** The +1.136 bias was measured on a
+  backtest without availability flags; in-season the engine feeds live
+  FPL flags and multiplies by expected minutes, both of which attack the
+  same over-prediction — a global correction now risks double-counting.
+  **Revisit at GW8** once the live ledger has its own paper-bucket
+  evidence.
+- **Product mitigation shipped instead**: projections within 0.5 of the
+  minutes-adjusted ~1.7 played-floor are flagged LOW_CONFIDENCE in the
+  brief and recorded in the ledger recommendation
+  (`model.is_low_confidence`), so recommendations resting on
+  floor-indistinguishable numbers are visible. Rationale: the floor
+  bias caps cheap fringe players' downside, which over-values them to
+  the solver (a plausible contributor to the bench-heavy pre-season
+  draft).
+
 **Status: OPEN — Blanks is flagged UNVALIDATED in any accuracy claim
 we publish.** Ruled out: AM mix (quantified), population mismatch
 (exact reconciliation), residual feature values (magnitude). Not ruled

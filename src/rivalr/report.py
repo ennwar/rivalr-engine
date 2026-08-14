@@ -55,6 +55,17 @@ def build_brief(
     projections = minutes.apply_minutes(raw_projections, est)
     next_gw_proj = {pid: xs[0] for pid, xs in projections.items() if xs}
 
+    # Diagnostic: projections within 0.5 of the minutes-adjusted model
+    # floor (~1.7 for anyone who plays) carry no distinguishable signal.
+    margins = {
+        pid: round(model.confidence_margin(x, est[pid].factor if pid in est else 1.0), 2)
+        for pid, x in next_gw_proj.items()
+    }
+    low_conf = {
+        pid for pid in margins
+        if margins[pid] <= model.LOW_CONFIDENCE_MARGIN
+    }
+
     # 2. Mini-league intelligence.
     log.info("building rivals report...")
     rep = rivals.build_rivals_report(
@@ -88,12 +99,16 @@ def build_brief(
             "transfers_in": chosen.get("transfers_in", []),
             "transfers_out": chosen.get("transfers_out", []),
             "captain": chosen.get("captain"),
+            "low_confidence_ins": [
+                p for p in chosen.get("transfers_in", []) if p in low_conf
+            ],
         },
     )
 
     # 5. Render.
     return render_brief(
-        gw, rep, plans, mode, target_id, elements, next_gw_proj, est
+        gw, rep, plans, mode, target_id, elements, next_gw_proj, est,
+        margins, low_conf,
     )
 
 
@@ -106,9 +121,21 @@ def render_brief(
     elements: dict[int, dict],
     proj: dict[int, float],
     est: dict[int, minutes.MinutesEstimate],
+    margins: dict[int, float] | None = None,
+    low_conf: set[int] | None = None,
 ) -> str:
     L: list[str] = []
     P = lambda pid: _pname(elements, pid)
+    margins = margins or {}
+    low_conf = low_conf or set()
+
+    def lc(pid: int) -> str:
+        """LOW_CONFIDENCE marker: projection within 0.5 of the model's
+        ~1.7 played-floor - a number the model can't distinguish from a
+        blank (see docs/backtest_findings.md)."""
+        if pid in low_conf:
+            return f" LOW_CONF(m{margins.get(pid, 0):+.1f})"
+        return ""
 
     L.append(f"RIVALR BRIEF - GW{gw}")
     L.append(f"{rep['league_name']}")
@@ -120,7 +147,7 @@ def render_brief(
         e = est.get(pid)
         flag = f"  ! {'; '.join(e.flags)}" if e and e.flags else ""
         cap = " (C)" if pid == rep.get("my_captain") else ""
-        L.append(f"  {P(pid):<18}{proj.get(pid, 0):>5.2f}{cap}{flag}")
+        L.append(f"  {P(pid):<18}{proj.get(pid, 0):>5.2f}{cap}{lc(pid)}{flag}")
     L.append(_hr())
 
     # League table with gaps
@@ -152,7 +179,7 @@ def render_brief(
     L.append("SWORDS AVAILABLE (low EO, high xPts)")
     for pid in rep["available_swords"][:8]:
         L.append(f"  {P(pid):<18}EO {float(eo.get(str(pid), 0)) * 100:.0f}%"
-                 f"  xPts {proj.get(pid, 0):.2f}")
+                 f"  xPts {proj.get(pid, 0):.2f}{lc(pid)}")
     L.append(_hr())
 
     # Transfer plans side by side
@@ -170,7 +197,12 @@ def render_brief(
         if not ins:
             L.append("  roll the transfer")
         for pid_out, pid_in in zip(outs, ins):
-            L.append(f"  OUT {P(pid_out):<16} IN {P(pid_in)}")
+            L.append(f"  OUT {P(pid_out):<16} IN {P(pid_in)}{lc(pid_in)}")
+        for pid_in in ins[len(outs):]:  # draft mode: no outs
+            L.append(f"  IN {P(pid_in)}{lc(pid_in)}")
+        n_lc = sum(1 for p in ins if p in low_conf)
+        if n_lc:
+            L.append(f"  ! {n_lc} incoming pick(s) rest on LOW_CONF projections")
         L.append(f"  xPts horizon: {plan.get('expected_points', 0):.1f}"
                  f"  hits: {plan.get('hits', 0)}")
         if plan.get("reasoning"):

@@ -103,12 +103,15 @@ def record_predictions(
     gw: int,
     projections: dict[int, list[float] | None],
     recommendation: dict,
-    ledger_dir: str | Path = LEDGER_DIR,
+    ledger_dir: str | Path | None = None,
     partial: bool = False,
     failures: list[str] | None = None,
 ) -> Path:
-    """Write the pre-deadline snapshot. Never overwrites an existing file."""
-    ledger_dir = Path(ledger_dir)
+    """Write the pre-deadline snapshot. Never overwrites an existing file.
+
+    ledger_dir defaults to LEDGER_DIR at call time (late-bound, so tests
+    that patch ledger.LEDGER_DIR actually redirect the write)."""
+    ledger_dir = Path(ledger_dir) if ledger_dir is not None else LEDGER_DIR
     ledger_dir.mkdir(parents=True, exist_ok=True)
     path = _snapshot_path(gw, ledger_dir)
     projected = sum(1 for v in projections.values() if v is not None)
@@ -167,10 +170,10 @@ def actual_stats(client: FPLClient, gw: int) -> dict[int, dict]:
 def score_gw(
     client: FPLClient,
     gw: int,
-    ledger_dir: str | Path = LEDGER_DIR,
+    ledger_dir: str | Path | None = None,
 ) -> dict:
     """RMSE/MAE per outcome bucket + transfer counterfactual for one GW."""
-    ledger_dir = Path(ledger_dir)
+    ledger_dir = Path(ledger_dir) if ledger_dir is not None else LEDGER_DIR
     ledger_path = _latest_ledger_for(gw, ledger_dir)
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     stats = actual_stats(client, gw)
