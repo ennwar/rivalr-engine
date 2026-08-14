@@ -78,3 +78,71 @@ tuning — then rerun the backtest and report the new deltas as they come
 out. Also pending: our ledger's scoring buckets (0 / 1-3 / 4-9 / 10+)
 do not match the paper's definitions used here (did-not-play / ≤2 /
 3-4 / ≥5); aligning them changes our weekly accuracy reports.
+
+---
+
+## Run 2 (2026-08-14, after approved correctness fixes)
+
+Fixes implemented, each verified against samples.csv before the rerun:
+
+1. **Venue-split `relevant fpl points`** (points at the upcoming match's
+   venue) — replaces the falsified approximation.
+2. **Cross-season fixture-slot windows**: a player's history is a
+   timeline of fixture slots (previous season joined by player code +
+   current season); windows take the trailing N slots FIRST, then drop
+   previous-season slots the player didn't play. This positional
+   drop-after-tail rule is what the samples require (Mitoma's unplayed
+   2023-24 tail occupies a slot but contributes nothing).
+3. **Understat 10/38 composition — RESOLVED, verified not assumed**:
+   tested four hypotheses against samples.csv; the winner (22/22 numeric
+   matches) is date-alignment of Understat matches onto the same
+   cross-season fixture slots (0.0 where the player has no Understat
+   match that day). Pure cross-season and pure alignment both fail
+   cases the combined rule passes.
+4. (Found en route) the Understat name matcher missed mononym players
+   ("Alisson" vs "Alisson Ramses Becker"/"A.Becker"); fixed with a
+   token-subset pass. Mapping 526 → 555 of 804.
+
+Feature-level residual after fixes: **13 mismatches out of 912** sample
+values (was ~150): `relevant fpl points 38` on 3 players and team-block
+`* 38` season-boundary conventions (~1-3% deltas). Their exact
+convention is not recoverable from 4 sample rows — left OPEN, not
+guessed.
+
+### Rerun result: **FAIL** against the pre-agreed criteria
+
+| Bucket  | n    | ours  | paper | dev    | was    | delta  | criterion |
+|---------|------|-------|-------|--------|--------|--------|-----------|
+| Zeros   | 3209 | 0.958 | 0.818 | +17.1% | +15.7% | +1.4pp | FAIL (must improve) |
+| Blanks  | 1464 | 1.610 | 1.291 | +24.7% | +19.8% | +4.9pp | FAIL (must improve; inside 25% numerically) |
+| Tickers | 185  | 1.393 | 1.517 | −8.2%  | −12.7% | +4.5pp | PASS (≤15%) |
+| Haulers | 455  | 5.208 | 5.142 | +1.3%  | +3.0%  | −1.7pp | PASS (≤5%) |
+
+### Why Zeros/Blanks moved the wrong way — with evidence
+
+The pre-fix numbers on zero/low-outcome buckets were **flattered by the
+bugs**: corrupted features depressed all predictions toward zero, which
+accidentally helps buckets whose true outcome is ~0 and hurts the
+performance buckets. Fixing the features recalibrated predictions
+upward: Tickers and Haulers moved toward the paper, Zeros/Blanks away.
+
+**Oracle-availability diagnostic** (`--oracle-availability`; leaks the
+outcome, NOT an accuracy claim — bounds the availability confound):
+with hindsight availability (0 if the player didn't play), Zeros goes
+0.958 → **0.471 (−42.5% vs paper)**. The paper's live 0-100% flags sit
+between our hardcoded 1.0 and this oracle ⇒ the Zeros gap is
+availability information vaastav cannot supply, not pipeline error.
+Blanks under the oracle: 24.7% → 23.5% — availability explains only
+~1pp; the Blanks residual remains OPEN (candidates: AM exclusion, the
+13/912 feature residuals, bucket-population differences).
+
+### Verdict
+
+The reimplementation is feature-verified to 899/912 sample values and
+lands within 1.3% (Haulers) and 8.2% (Tickers) of the paper on the
+buckets that measure actual performances. The formal result against the
+agreed criteria is FAIL: the Zeros/Blanks directional clause assumed
+the fixes would improve those buckets, but the evidence shows their
+deviation is dominated by the backtest's missing point-in-time
+availability data, which no pipeline change can fix. Both runs and the
+oracle diagnostic are preserved above; the criteria were not moved.

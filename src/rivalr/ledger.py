@@ -12,12 +12,16 @@ Naming / append-only rule:
     *_test.json           plumbing artifacts — never scored
 
 Scoring (python -m rivalr.score --gw N) uses the highest-versioned real
-snapshot, with RMSE/MAE split into the OpenFPL paper's outcome buckets:
+snapshot and reports TWO bucket views:
 
-    Zeros    0 points
-    Blanks   1-3 points
-    Tickers  4-9 points
-    Haulers  10+ points
+  primary  - the OpenFPL paper's buckets (arXiv 2508.09992 Table 4),
+             directly comparable to the published benchmark:
+               Zeros    did not play (0 minutes)
+               Blanks   played, <= 2 points
+               Tickers  3-4 points
+               Haulers  5+ points
+  secondary - legacy point-range buckets (more intuitive for a
+             user-facing report): 0 / 1-3 / 4-9 / 10+
 
 plus a counterfactual: points from the recommended transfers vs points
 from the transfers actually made.
@@ -38,12 +42,36 @@ log = logging.getLogger("rivalr.ledger")
 
 LEDGER_DIR = Path("logs/predictions")
 
-BUCKETS = [
+LEGACY_BUCKETS = [
     ("Zeros", 0, 0),
     ("Blanks", 1, 3),
     ("Tickers", 4, 9),
     ("Haulers", 10, 10_000),
 ]
+
+
+def paper_bucket(minutes: int, points: int) -> str:
+    """OpenFPL paper (arXiv 2508.09992) Table 4 buckets."""
+    if minutes == 0:
+        return "Zeros"
+    if points <= 2:
+        return "Blanks"
+    if points <= 4:
+        return "Tickers"
+    return "Haulers"
+
+
+BUCKET_NAMES = ["Zeros", "Blanks", "Tickers", "Haulers"]
+
+
+def _bucket_stats(errs: list[float]) -> dict:
+    if not errs:
+        return {"n": 0, "rmse": None, "mae": None}
+    return {
+        "n": len(errs),
+        "rmse": round(math.sqrt(sum(e * e for e in errs) / len(errs)), 3),
+        "mae": round(sum(abs(e) for e in errs) / len(errs), 3),
+    }
 
 _SNAPSHOT_RE = re.compile(r"^gw(\d+)(?:_v(\d+))?\.json$")
 
@@ -124,9 +152,16 @@ def _latest_ledger_for(gw: int, ledger_dir: Path) -> Path:
     return best[1]
 
 
-def actual_points(client: FPLClient, gw: int) -> dict[int, int]:
+def actual_stats(client: FPLClient, gw: int) -> dict[int, dict]:
+    """{player_id: {points, minutes}} for a finished GW."""
     live = client.event_live(gw)
-    return {el["id"]: el["stats"]["total_points"] for el in live["elements"]}
+    return {
+        el["id"]: {
+            "points": el["stats"]["total_points"],
+            "minutes": el["stats"].get("minutes", 0),
+        }
+        for el in live["elements"]
+    }
 
 
 def score_gw(
@@ -138,38 +173,38 @@ def score_gw(
     ledger_dir = Path(ledger_dir)
     ledger_path = _latest_ledger_for(gw, ledger_dir)
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-    actuals = actual_points(client, gw)
+    stats = actual_stats(client, gw)
+    actuals = {pid: s["points"] for pid, s in stats.items()}
 
-    pairs: list[tuple[int, float, int]] = []  # (pid, predicted_gw1, actual)
+    # (pid, predicted, actual points, actual minutes)
+    pairs: list[tuple[int, float, int, int]] = []
     unprojected = 0
     for pid_str, xs in ledger["projections"].items():
         pid = int(pid_str)
         if xs is None:
             unprojected += 1
             continue
-        if pid in actuals and xs:
-            pairs.append((pid, float(xs[0]), actuals[pid]))
+        if pid in stats and xs:
+            pairs.append(
+                (pid, float(xs[0]), stats[pid]["points"], stats[pid]["minutes"])
+            )
 
-    table = {}
-    for name, lo, hi in BUCKETS:
-        bucket = [(p, a) for _, p, a in pairs if lo <= a <= hi]
-        if bucket:
-            errs = [p - a for p, a in bucket]
-            table[name] = {
-                "n": len(bucket),
-                "rmse": round(math.sqrt(sum(e * e for e in errs) / len(errs)), 3),
-                "mae": round(sum(abs(e) for e in errs) / len(errs), 3),
-            }
-        else:
-            table[name] = {"n": 0, "rmse": None, "mae": None}
-    all_errs = [p - a for _, p, a in pairs]
-    table["All"] = {
-        "n": len(pairs),
-        "rmse": round(math.sqrt(sum(e * e for e in all_errs) / len(all_errs)), 3)
-        if all_errs else None,
-        "mae": round(sum(abs(e) for e in all_errs) / len(all_errs), 3)
-        if all_errs else None,
-    }
+    paper_errs: dict[str, list[float]] = {name: [] for name in BUCKET_NAMES}
+    legacy_errs: dict[str, list[float]] = {name: [] for name in BUCKET_NAMES}
+    all_errs: list[float] = []
+    for _, pred, pts, mins in pairs:
+        err = pred - pts
+        all_errs.append(err)
+        paper_errs[paper_bucket(mins, pts)].append(err)
+        for name, lo, hi in LEGACY_BUCKETS:
+            if lo <= pts <= hi:
+                legacy_errs[name].append(err)
+                break
+
+    table = {name: _bucket_stats(errs) for name, errs in paper_errs.items()}
+    table["All"] = _bucket_stats(all_errs)
+    table_legacy = {name: _bucket_stats(errs) for name, errs in legacy_errs.items()}
+    table_legacy["All"] = table["All"]
 
     counterfactual = _transfer_counterfactual(client, gw, ledger, actuals)
 
@@ -203,7 +238,8 @@ def score_gw(
             "total_points_missed": sum(r["points"] for r in unrostered),
             "players": unrostered,
         },
-        "accuracy": table,
+        "accuracy": table,          # paper buckets (arXiv 2508.09992 Table 4)
+        "accuracy_legacy": table_legacy,  # point-range buckets 0/1-3/4-9/10+
         "counterfactual": counterfactual,
     }
     out = ledger_dir / f"gw{gw}_score.json"
@@ -257,13 +293,20 @@ def format_score_table(result: dict) -> str:
         )
         for r in unr["players"][:10]:
             lines.append(f"  {r['name']} ({r['points']} pts)")
-    lines.append("")
-    lines.append(f"{'Bucket':<9}{'n':>6}{'RMSE':>8}{'MAE':>8}")
-    for name in ["Zeros", "Blanks", "Tickers", "Haulers", "All"]:
-        row = result["accuracy"][name]
-        rmse = f"{row['rmse']:.3f}" if row["rmse"] is not None else "-"
-        mae = f"{row['mae']:.3f}" if row["mae"] is not None else "-"
-        lines.append(f"{name:<9}{row['n']:>6}{rmse:>8}{mae:>8}")
+    def render(table: dict, title: str) -> None:
+        lines.append("")
+        lines.append(title)
+        lines.append(f"{'Bucket':<9}{'n':>6}{'RMSE':>8}{'MAE':>8}")
+        for name in ["Zeros", "Blanks", "Tickers", "Haulers", "All"]:
+            row = table[name]
+            rmse = f"{row['rmse']:.3f}" if row["rmse"] is not None else "-"
+            mae = f"{row['mae']:.3f}" if row["mae"] is not None else "-"
+            lines.append(f"{name:<9}{row['n']:>6}{rmse:>8}{mae:>8}")
+
+    render(result["accuracy"],
+           "Paper buckets (arXiv 2508.09992: DNP / <=2 / 3-4 / 5+)")
+    render(result["accuracy_legacy"],
+           "Legacy buckets (points 0 / 1-3 / 4-9 / 10+)")
     cf = result["counterfactual"]
     lines += [
         "",

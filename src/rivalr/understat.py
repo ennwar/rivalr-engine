@@ -197,6 +197,17 @@ class Understat:
 
             hit = candidates.get(full) or all_names.get(full)
             if not hit:
+                # Token-subset pass (within team): understat often uses a
+                # short form ("Alisson", "Gabriel Jesus") whose tokens are a
+                # subset of the FPL full name. Require a unique candidate.
+                full_tokens = set(full.split())
+                subset_hits = [
+                    cand for cand in candidates
+                    if set(cand.split()) <= full_tokens
+                ]
+                if len(subset_hits) == 1:
+                    hit = candidates[subset_hits[0]]
+            if not hit:
                 close = difflib.get_close_matches(full, list(candidates), n=1, cutoff=0.75)
                 if not close:
                     close = difflib.get_close_matches(

@@ -100,8 +100,48 @@ def _windowed(values: list[float]) -> dict[int, float]:
     return out
 
 
-def _appearance_points(minutes: int) -> int:
-    return 2 if minutes >= 60 else (1 if minutes > 0 else 0)
+# -- fixture-slot windows (semantics verified against OpenFPL samples.csv,
+# see docs/backtest_findings.md) ------------------------------------------
+#
+# A player's history is a timeline of fixture SLOTS: the previous season's
+# rows (played or not) followed by the current season's rows. A window
+# takes the trailing N slots of the timeline FIRST, then drops
+# previous-season slots the player didn't play (they hold a timeline
+# position but carry no observation; current-season 0-minute rows are
+# real observations and stay), and averages what remains.
+
+
+def _slot_dropped(slot: dict) -> bool:
+    return bool(slot.get("_prev")) and float(slot["minutes"]) == 0
+
+
+def slot_windowed(slots: list[dict], value_fn) -> dict[int, float]:
+    out = {}
+    for w in WINDOWS:
+        vals = [value_fn(s) for s in slots[-w:] if not _slot_dropped(s)]
+        out[w] = sum(vals) / len(vals) if vals else math.nan
+    return out
+
+
+def _slot_home(slot: dict) -> bool:
+    return str(slot.get("was_home")) == "True"
+
+
+def venue_windowed(slots: list[dict], home: bool) -> dict[int, float]:
+    """'relevant fpl points': points in slots at the upcoming venue."""
+    vslots = [s for s in slots if _slot_home(s) == home]
+    return slot_windowed(vslots, lambda s: float(s["total_points"]))
+
+
+def aligned_windowed(
+    slots: list[dict], us_by_date: dict[str, dict], key: str
+) -> dict[int, float]:
+    """Understat player metrics date-aligned onto the fixture slots,
+    0.0 where the player has no Understat match that day."""
+    def val(slot: dict) -> float:
+        m = us_by_date.get(str(slot["kickoff_time"])[:10])
+        return float(m.get(key) or 0.0) if m else 0.0
+    return slot_windowed(slots, val)
 
 
 class OpenFPLModel:
@@ -128,6 +168,62 @@ class OpenFPLModel:
         self._us_ready = False
         self._us_team_hist: dict[str, list[dict]] = {}   # understat title -> history
         self._us_player_map: dict[int, str] = {}          # fpl id -> understat id
+
+        self._prev_loaded = False
+        self._prev_rows_by_code: dict[str, list[dict]] = {}  # player code -> rows
+
+    # -- previous-season fixture rows (vaastav dataset) --------------------
+
+    PREV_SEASON_URL = (
+        "https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/"
+        "master/data/{season}/{name}"
+    )
+
+    def _load_prev_season(self) -> None:
+        """Previous season's per-fixture rows, keyed by permanent player
+        code (element ids change between seasons). Finished-season data:
+        downloaded once, cached forever. Loud failure -> empty (windows
+        then truncate at the season boundary, logged)."""
+        if self._prev_loaded:
+            return
+        self._prev_loaded = True
+        import csv
+        import urllib.request
+
+        bootstrap = self.client.bootstrap()
+        year = int(bootstrap["events"][0]["deadline_time"][:4])
+        season = f"{year - 1}-{year % 100:02d}"
+        cache = Path(self.client.cache_dir)
+        try:
+            files = {}
+            for name in ("gws/merged_gw.csv", "players_raw.csv"):
+                path = cache / f"vaastav_{season}_{name.replace('/', '_')}"
+                if not path.exists():
+                    url = self.PREV_SEASON_URL.format(season=season, name=name)
+                    log.info("downloading previous-season data: %s", url)
+                    urllib.request.urlretrieve(url, path)
+                with path.open(encoding="utf-8") as f:
+                    files[name] = list(csv.DictReader(f))
+            id_to_code = {
+                int(p["id"]): p["code"] for p in files["players_raw.csv"]
+            }
+            by_code: dict[str, list[dict]] = {}
+            for r in files["gws/merged_gw.csv"]:
+                code = id_to_code.get(int(r["element"]))
+                if code:
+                    r["_prev"] = True
+                    by_code.setdefault(code, []).append(r)
+            for rows in by_code.values():
+                rows.sort(key=lambda r: r["kickoff_time"])
+            self._prev_rows_by_code = by_code
+            log.info("previous season (%s): fixture rows for %d players",
+                     season, len(by_code))
+        except Exception:
+            log.error(
+                "PREVIOUS-SEASON DATA UNAVAILABLE (%s) - windows will "
+                "truncate at the season boundary", season, exc_info=True,
+            )
+            self._prev_rows_by_code = {}
 
     # -- artifact loading --------------------------------------------------
 
@@ -195,31 +291,38 @@ class OpenFPLModel:
 
     # -- feature building --------------------------------------------------
 
-    def _player_features(self, pid: int) -> dict[str, float]:
+    def _player_slots(self, pid: int) -> list[dict]:
+        """Fixture-slot timeline: previous-season rows (vaastav, by player
+        code) + current-season element-summary rows, kickoff order."""
+        self._load_prev_season()
         el = self._elements[pid]
-        history = self.client.element_summary(pid).get("history", [])
+        prev = self._prev_rows_by_code.get(str(el.get("code")), [])
+        current = self.client.element_summary(pid).get("history", [])
+        return prev + list(current)  # both already kickoff-sorted
+
+    def _player_features(
+        self, pid: int
+    ) -> tuple[dict[str, float], dict[int, float], dict[int, float]]:
+        """(venue-independent features, relevant-home windows,
+        relevant-away windows). 'relevant fpl points' depends on the
+        upcoming fixture's venue, so both variants are returned and the
+        caller picks per fixture."""
+        el = self._elements[pid]
+        slots = self._player_slots(pid)
         feats: dict[str, float] = {}
 
         for base, key in FPL_PLAYER_METRICS.items():
-            series = [float(h[key]) for h in history]
-            for w, val in _windowed(series).items():
+            for w, val in slot_windowed(slots, lambda s, k=key: float(s[k])).items():
                 feats[f"{base} {w}"] = val
 
-        # "relevant fpl points" is defined in the OpenFPL paper, not the repo.
-        # Approximation used here: points from on-pitch contributions only,
-        # i.e. total minus appearance points minus bonus.
-        relevant = [
-            float(h["total_points"]) - _appearance_points(h["minutes"]) - float(h["bonus"])
-            for h in history
-        ]
-        for w, val in _windowed(relevant).items():
-            feats[f"player relevant fpl points {w}"] = val
+        rel_home = venue_windowed(slots, home=True)
+        rel_away = venue_windowed(slots, home=False)
 
         us_id = self._us_player_map.get(pid)
         matches = self.understat.player_matches(us_id) if us_id else []
+        us_by_date = {m["date"][:10]: m for m in matches}
         for base, key in US_PLAYER_METRICS.items():
-            series = [float(m.get(key) or 0.0) for m in matches]
-            for w, val in _windowed(series).items():
+            for w, val in aligned_windowed(slots, us_by_date, key).items():
                 feats[f"{base} {w}"] = val
 
         status = el.get("status", "a")
@@ -231,7 +334,7 @@ class OpenFPLModel:
         else:
             avail = (chance if chance is not None else 50) / 100.0
         feats["status player availability"] = avail
-        return feats
+        return feats, rel_home, rel_away
 
     def _upcoming_fixtures(self, horizon: int) -> tuple[int, dict[int, dict[int, list[dict]]]]:
         """next_gw, {team_id: {gw: [ {opponent, home} ]}} over the horizon."""
@@ -292,13 +395,16 @@ class OpenFPLModel:
             el = self._elements.get(pid)
             if el is None or el["element_type"] not in POSITIONS:
                 continue
-            base = self._player_features(pid)
+            base, rel_home, rel_away = self._player_features(pid)
             season_matches[pid] = len(self.client.element_summary(pid).get("history", []))
             base.update(own_block[el["team"]])
             team_fixtures = fixtures.get(el["team"], {})
             for gw in gws:
                 for fx in team_fixtures.get(gw, []):
                     row = dict(base)
+                    rel = rel_home if fx["home"] else rel_away
+                    for w, val in rel.items():
+                        row[f"player relevant fpl points {w}"] = val
                     row.update(opp_block[fx["opponent"]])
                     row["_pos"] = POSITIONS[el["element_type"]]
                     rows.append(row)

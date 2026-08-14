@@ -65,15 +65,15 @@ def test_partial_flag_and_failures_recorded(tmp_path):
 class StubClient:
     """Offline stand-in for FPLClient in scoring tests."""
 
-    def __init__(self, live_points: dict[int, int], elements: list[dict]):
-        self._live = live_points
+    def __init__(self, live: dict[int, tuple[int, int]], elements: list[dict]):
+        self._live = live  # pid -> (points, minutes)
         self._elements = elements
 
     def event_live(self, gw):
         return {
             "elements": [
-                {"id": pid, "stats": {"total_points": pts}}
-                for pid, pts in self._live.items()
+                {"id": pid, "stats": {"total_points": pts, "minutes": mins}}
+                for pid, (pts, mins) in self._live.items()
             ]
         }
 
@@ -91,7 +91,7 @@ def test_scoring_reports_unrostered_at_snapshot(tmp_path):
     # joined after the snapshot; 3 scored, 4 blanked.
     record_predictions(5, {1: [2.0], 2: None}, {}, ledger_dir=tmp_path)
     client = StubClient(
-        live_points={1: 2, 2: 0, 3: 6, 4: 0},
+        live={1: (2, 90), 2: (0, 0), 3: (6, 90), 4: (0, 0)},
         elements=[{"id": i, "web_name": f"P{i}"} for i in (1, 2, 3, 4)],
     )
     result = score_gw(client, 5, ledger_dir=tmp_path)
@@ -102,6 +102,31 @@ def test_scoring_reports_unrostered_at_snapshot(tmp_path):
     assert unr["total_points_missed"] == 6
     assert result["unprojected_players"] == 1  # null is counted separately
     assert result["accuracy"]["All"]["n"] == 1  # only player 1 is scoreable
+
+
+def test_scoring_dual_bucket_views(tmp_path):
+    from rivalr.ledger import score_gw
+
+    # p1: played, 2 pts -> paper Blanks, legacy Blanks (1-3)
+    # p2: did not play, 0 pts -> paper Zeros, legacy Zeros
+    # p3: played, 4 pts -> paper Tickers, legacy Tickers (4-9)
+    # p4: played, 0 pts -> paper Blanks (played, <=2) but legacy Zeros!
+    record_predictions(
+        6, {1: [2.0], 2: [1.0], 3: [3.0], 4: [1.5]}, {}, ledger_dir=tmp_path
+    )
+    client = StubClient(
+        live={1: (2, 90), 2: (0, 0), 3: (4, 60), 4: (0, 45)},
+        elements=[{"id": i, "web_name": f"P{i}"} for i in (1, 2, 3, 4)],
+    )
+    result = score_gw(client, 6, ledger_dir=tmp_path)
+
+    paper, legacy = result["accuracy"], result["accuracy_legacy"]
+    assert paper["Blanks"]["n"] == 2      # p1 and p4 (played, <=2 pts)
+    assert paper["Zeros"]["n"] == 1       # p2 only (did not play)
+    assert legacy["Zeros"]["n"] == 2      # p2 and p4 (0 points)
+    assert legacy["Blanks"]["n"] == 1     # p1
+    assert paper["Tickers"]["n"] == legacy["Tickers"]["n"] == 1
+    assert paper["All"] == legacy["All"]
 
 
 # -- small-league pairwise swing -------------------------------------------
