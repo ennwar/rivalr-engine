@@ -275,16 +275,29 @@ def main() -> int:
         a["points"] += m["points"]
         a["minutes"] += m["minutes"]
 
+    # Per-(player, GW) dump so bucket analyses can run offline.
+    pos_by_el = {int(r["element"]): POS_MAP.get(r["position"], "?") for r in merged}
+    dump = CACHE / "predictions_dump.csv"
+    with dump.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["element", "gw", "pos", "pred", "points", "minutes"])
+        for (el, g), a in sorted(agg.items()):
+            w.writerow([el, g, pos_by_el.get(el, "?"),
+                        round(a["pred"], 4), a["points"], a["minutes"]])
+    log.info("prediction dump written: %s (%d rows)", dump, len(agg))
+
     errors: dict[str, list[float]] = defaultdict(list)
     for a in agg.values():
         errors[bucket_of(a["minutes"], a["points"])].append(a["pred"] - a["points"])
 
     print()
-    print(f"{'Bucket':<9}{'n':>6}{'ours':>8}{'paper':>8}{'dev':>9}{'was':>9}{'delta':>9}")
+    print(f"{'Bucket':<9}{'n':>6}{'ours':>8}{'paper':>8}{'dev':>9}{'was':>9}"
+          f"{'delta':>9}{'meanerr':>9}")
     all_ok = True
     for name in ["Zeros", "Blanks", "Tickers", "Haulers"]:
         errs = errors[name]
         rmse = math.sqrt(sum(e * e for e in errs) / len(errs)) if errs else float("nan")
+        mean_err = sum(errs) / len(errs) if errs else float("nan")
         dev = (rmse - PAPER[name]) / PAPER[name]
         was = BASELINE_DEV[name]
         ok = abs(dev) <= TOLERANCES[name]
@@ -293,7 +306,8 @@ def main() -> int:
         if not ok:
             all_ok = False
         print(f"{name:<9}{len(errs):>6}{rmse:>8.3f}{PAPER[name]:>8.3f}{dev:>8.1%}"
-              f"{was:>8.1%}{dev - was:>+8.1%}{'' if ok else '  <-- outside criteria'}")
+              f"{was:>8.1%}{dev - was:>+8.1%}{mean_err:>+9.3f}"
+              f"{'' if ok else '  <-- outside criteria'}")
 
     print()
     print("Pass criteria (fixed pre-run): Haulers 5%, Tickers 15%, "

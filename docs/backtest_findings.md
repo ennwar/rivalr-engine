@@ -146,3 +146,61 @@ the fixes would improve those buckets, but the evidence shows their
 deviation is dominated by the backtest's missing point-in-time
 availability data, which no pipeline change can fix. Both runs and the
 oracle diagnostic are preserved above; the criteria were not moved.
+
+---
+
+## Blanks residual attribution (2026-08-14, timeboxed session)
+
+Question: why is Blanks +24.7% vs the paper and unmoved by the
+availability oracle? Four candidates tested against evidence
+(per-player prediction dump: `data/cache/backtest/predictions_dump.csv`).
+
+**1. AM exclusion — RESOLVED, and it makes our gap larger, not smaller.**
+The paper's Table 5 gives per-position Blanks RMSE (OpenFPL): GK 0.888,
+DEF 1.129, MID 1.189, FWD 1.024 — and AM **6.192**. Applying their
+per-position rates to our population mix yields an outfield-only
+aggregate of **1.136**; their Table 4 aggregate of 1.291 is therefore
+pulled up by roughly 15 AM blank rows at RMSE 6.192. The like-for-like
+(AM-free) benchmark for us is 1.136, so our true Blanks deviation is
+**+41.7%**, not +24.7%.
+
+**2. Bucket population — RESOLVED: comparable.** Applying the paper's
+per-position Zeros rates to our population mix reproduces their Table 4
+Zeros aggregate **exactly (0.818)**. The evaluation universes match;
+the RMSEs measure the same thing. (This also cross-validates the
+transcribed Table 5.)
+
+**3. The 13/912 residual feature values — RULED OUT on magnitude.**
+They are `relevant fpl points 38` (3 players) and team-block `* 38`
+conventions, deltas ~1-3% of feature value ≈ ≤1.5% shifts in scaled
+space on ≤3 of 206 inputs. They cannot produce the observed uniform
++1.1-point bias, and they are team-level features that affect all
+buckets, not specifically sub-2-point players.
+
+**4. Systematic bias — CONFIRMED as the dominant cause.** Blanks mean
+signed error is **+1.136** (bias² = 50% of the MSE). It is uniform
+across positions (GK +1.26, DEF +1.09, MID +1.19, FWD +0.97) and across
+minutes bands (1-30 min +0.85, 31-60 +1.62, 61-90 +1.18) — a floor
+effect: our 25th-percentile prediction for played players is 1.72, the
+model essentially never predicts below ~1.7 for anyone on the pitch.
+With per-position mean bias removed, DEF (+8.5%), MID (−10.4%) and FWD
+(+10.7%) match the paper; only GK (+35.9%, n=77) stays high. Tickers
+(+0.06 mean error) and the calibrated Haulers rule out a global shift.
+
+**Attribution.** The Blanks excess is a systematic over-prediction of
+eventual blankers relative to the paper's model. The one known input we
+cannot reproduce is the paper's point-in-time fractional availability
+flags (25/50/75%), which depress predictions for doubtful players who
+play limited roles — the oracle (binary, played/didn't) could not test
+this by construction. No pipeline defect was identified that could
+produce a uniform bias while leaving Tickers/Haulers calibrated. GK's
+post-de-bias residual (n=77) is left open.
+
+**Status: OPEN — Blanks is flagged UNVALIDATED in any accuracy claim
+we publish.** Ruled out: AM mix (quantified), population mismatch
+(exact reconciliation), residual feature values (magnitude). Not ruled
+out: missing fractional availability flags; a genuine floor bias in our
+feature pipeline for fringe players. Production notes: in-season the
+engine feeds live FPL flags and multiplies by expected minutes
+(minutes.py), both of which reduce exactly this over-prediction, but
+neither can be backtested against 2024-25 without historical flags.
