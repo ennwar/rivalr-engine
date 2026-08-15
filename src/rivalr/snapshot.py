@@ -37,7 +37,7 @@ from pathlib import Path
 
 from . import defcon, ledger, minutes, model, optimise, rivals, uncertainty
 from .fetch import FPLClient
-from .notify import telegram_send
+from .notify import require_config, telegram_send
 
 log = logging.getLogger("rivalr.snapshot")
 
@@ -317,6 +317,14 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
     client = FPLClient()
+
+    # Loud startup check: missing telegram config must never be silent -
+    # but it also must never stop the ledger, which outranks everything.
+    try:
+        require_config()
+    except RuntimeError as exc:
+        log.error("%s", exc)
+        _alert(0, f"TELEGRAM NOT CONFIGURED: {exc}")
 
     # Element count goes into every run-log entry: the player universe
     # grows through the transfer window, and we want to watch it move.

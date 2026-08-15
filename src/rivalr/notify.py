@@ -1,13 +1,21 @@
-"""Telegram notifications for the scheduled runner.
+"""Telegram notifications for the scheduled runner - DEDICATED rivalr bot.
 
-Token/chat id live in rivalr-engine/.env (gitignored), same variable
-names as the trading-platform bot:
+Config lives in rivalr-engine/.env (gitignored), with rivalr-specific
+variable names so the trading bot's credentials can never be picked up
+by accident:
 
-    TELEGRAM_BOT_TOKEN=...
-    TELEGRAM_CHAT_ID=...
+    RIVALR_TELEGRAM_BOT_TOKEN=...
+    RIVALR_TELEGRAM_CHAT_ID=...
 
-telegram_send() never raises and never blocks a snapshot: missing
-config or network failure logs a warning and returns False.
+Policy:
+  - ONLY these two keys, ONLY from this repo's .env. No fallback to
+    os.environ, no fallback to other variable names or files.
+  - require_config() raises loudly when they're missing - the snapshot
+    runner calls it at startup and screams (alert file + ERROR log) but
+    still writes the ledger, which outranks everything.
+  - telegram_send() itself never raises mid-pipeline.
+
+Test after configuring:  uv run python -m rivalr.notify --test
 """
 
 from __future__ import annotations
@@ -23,6 +31,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = REPO_ROOT / ".env"
 API = "https://api.telegram.org/bot{token}/{method}"
 
+TOKEN_KEY = "RIVALR_TELEGRAM_BOT_TOKEN"
+CHAT_KEY = "RIVALR_TELEGRAM_CHAT_ID"
+
 
 def _load_env(path: Path = ENV_FILE) -> dict[str, str]:
     env: dict[str, str] = {}
@@ -36,14 +47,28 @@ def _load_env(path: Path = ENV_FILE) -> dict[str, str]:
     return env
 
 
+def require_config(path: Path = ENV_FILE) -> tuple[str, str]:
+    """(token, chat_id) or a loud RuntimeError. Never falls back to any
+    other variable name, file, or the process environment."""
+    env = _load_env(path)
+    token = env.get(TOKEN_KEY, "")
+    chat_id = env.get(CHAT_KEY, "")
+    missing = [k for k, v in ((TOKEN_KEY, token), (CHAT_KEY, chat_id)) if not v]
+    if missing:
+        raise RuntimeError(
+            f"rivalr telegram not configured: {', '.join(missing)} missing "
+            f"from {path} - notifications will NOT be sent. Create the bot "
+            f"via BotFather, /start it, and put the values in {path.name}."
+        )
+    return token, chat_id
+
+
 def telegram_send(text: str) -> bool:
-    """Best-effort Telegram message. Returns True on confirmed delivery."""
-    env = _load_env()
-    token = env.get("TELEGRAM_BOT_TOKEN")
-    chat_id = env.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        log.warning("telegram not configured (.env missing TELEGRAM_BOT_TOKEN"
-                    "/TELEGRAM_CHAT_ID) - notification skipped")
+    """Best-effort Telegram message via the rivalr bot. Never raises."""
+    try:
+        token, chat_id = require_config()
+    except RuntimeError as exc:
+        log.error("%s", exc)
         return False
     try:
         resp = requests.post(
@@ -59,3 +84,20 @@ def telegram_send(text: str) -> bool:
     except Exception as exc:
         log.warning("telegram send failed: %r", exc)
         return False
+
+
+def main() -> int:
+    import sys
+
+    logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
+    require_config()  # loud failure by design
+    text = "rivalr bot test: dedicated bot is live."
+    if len(sys.argv) > 1 and sys.argv[1] != "--test":
+        text = " ".join(sys.argv[1:])
+    ok = telegram_send(text)
+    print("delivered:", ok)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
