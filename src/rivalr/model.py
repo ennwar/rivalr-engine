@@ -184,6 +184,7 @@ class OpenFPLModel:
 
         self._artifacts_loaded = False
         self._models: dict[str, list] = {}
+        self._model_paths: dict[str, list] = {}
         self._xscaler = None
         self._yscaler = None
         self._features: dict[str, list[str]] = {}
@@ -267,19 +268,35 @@ class OpenFPLModel:
                 f"expected 228 scaler features, got {len(self._feature_order)}"
             )
         for pos in ["GK", "DEF", "MID", "FWD"]:
-            bundle = []
+            paths = []
             for cv in range(1, 6):
                 cv_dir = models_dir / f"cv{cv}_{pos}"
                 for candidate in sorted(p for p in cv_dir.iterdir() if p.is_dir()):
                     files = list(candidate.glob("*.joblib"))
                     if files:
-                        bundle.append(joblib.load(files[0]))
-            if len(bundle) != 50:
-                log.warning("%s: loaded %d models (expected 50)", pos, len(bundle))
-            self._models[pos] = bundle
+                        paths.append(files[0])
+            if len(paths) != 50:
+                log.warning("%s: found %d model files (expected 50)", pos, len(paths))
+            self._model_paths[pos] = paths
         self._artifacts_loaded = True
-        log.info("OpenFPL artifacts loaded (%d models)",
-                 sum(len(v) for v in self._models.values()))
+        log.info("OpenFPL artifacts indexed (%d model files)",
+                 sum(len(v) for v in self._model_paths.values()))
+
+    def _models_for(self, pos: str) -> list:
+        """Load a position's 50-model bundle. With RIVALR_LOW_MEM=1 the
+        bundle is NOT cached - the caller predicts and releases, keeping
+        peak memory to one position's models (matters on small cloud
+        containers; the ensemble itself is unchanged)."""
+        import os
+
+        import joblib
+
+        if pos in self._models:
+            return self._models[pos]
+        bundle = [joblib.load(p) for p in self._model_paths[pos]]
+        if os.environ.get("RIVALR_LOW_MEM") != "1":
+            self._models[pos] = bundle
+        return bundle
 
     # -- understat aggregates ----------------------------------------------
 
@@ -380,17 +397,25 @@ class OpenFPLModel:
     # -- inference ---------------------------------------------------------
 
     def _predict_position(self, pos: str, rows: pd.DataFrame) -> np.ndarray:
+        import gc
+        import os
+
         X = rows[self._feature_order].to_numpy()
         X = np.nan_to_num(X).astype("float32")
         X = np.nan_to_num(self._xscaler.transform(X)).astype("float32")
         idx = [self._feature_order.index(f) for f in self._features[pos]]
         X = X[:, idx]
+        bundle = self._models_for(pos)
         preds = []
-        for model in self._models[pos]:
+        for model in bundle:
             p = model.predict(X)
             p = self._yscaler.inverse_transform(p.reshape(-1, 1)).reshape(-1)
             preds.append(p)
-        return np.median(np.vstack(preds), axis=0)
+        result = np.median(np.vstack(preds), axis=0)
+        if os.environ.get("RIVALR_LOW_MEM") == "1":
+            del bundle, preds
+            gc.collect()
+        return result
 
     def default_pool(self) -> list[int]:
         """Players worth projecting: not marked unavailable/left."""
