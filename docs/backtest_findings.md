@@ -217,7 +217,40 @@ post-de-bias residual (n=77) is left open.
   draft).
 
 **Status: OPEN — Blanks is flagged UNVALIDATED in any accuracy claim
-we publish.** Ruled out: AM mix (quantified), population mismatch
+we publish.**
+
+---
+
+## DefCon correction layer (2026-08-15)
+
+OpenFPL (trained 2020-21..2023-24) has never seen defensive-contribution
+points (2025-26+): DEF 10+ CBIT / MID-FWD 12+ CBIRT, capped at 2. Built
+`src/defcon.py`: per-group logistic P(threshold | 60+ mins) with a
+Poisson-tail feature, fit on 2025-26; expected points = P x 2 x P(60+);
+ADDITIVE to the base projection, ledger logs base/defcon/final
+separately (`layers` block) so each layer can be scored on its own.
+
+**Calibration (temporal validation: fit GW2-19, validate GW20-38 of
+2025-26).** The first iteration (raw rates only) was compressed —
+over-predicting low deciles, under-predicting high. Adding the Poisson
+tail P(Poisson(rate x mins) >= T) largely fixed it:
+
+- DEF: n=1516, base rate 0.261, Brier 0.177, AUC 0.698. Deciles 7-10
+  track well (0.32/0.28, 0.36/0.40, 0.43/0.44, 0.55/0.51); the low tail
+  over-predicts (0.16 vs 0.09).
+- MIDFWD: n=2011, base rate 0.154, Brier 0.115, AUC 0.801. Top decile
+  excellent (0.43/0.42); deciles 8-9 under-predict (0.19/0.32, 0.24/0.34)
+  — conservative on elite defensive mids, the safe direction.
+
+**Expected effect, stated in advance (check at GW8):** DefCon points
+move defenders out of the sub-2-point bucket, so the layer should
+REDUCE our live Blanks error in the paper-bucket ledger scoring. If it
+does not, the layer is not doing what we think and gets re-examined.
+The 3-layer ledger makes this testable: score base-only vs final.
+
+**BPS adjustment: deliberately NOT built** (2026-27 BPS retuned, no
+observed data). Stub `defcon.bps_adjustment()` returns zeros; revisit
+at GW8. Ruled out: AM mix (quantified), population mismatch
 (exact reconciliation), residual feature values (magnitude). Not ruled
 out: missing fractional availability flags; a genuine floor bias in our
 feature pipeline for fringe players. Production notes: in-season the

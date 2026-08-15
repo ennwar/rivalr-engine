@@ -35,7 +35,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import ledger, minutes, model, optimise, rivals
+from . import defcon, ledger, minutes, model, optimise, rivals
 from .fetch import FPLClient
 
 log = logging.getLogger("rivalr.snapshot")
@@ -150,15 +150,31 @@ def take_snapshot(
     except Exception as exc:
         failures.append(f"bootstrap: {exc!r}")
 
+    base: dict[int, list[float]] = {}
+    dc_corr: dict[int, list[float]] = {}
     try:
         raw = model.project_all(client, horizon=horizon)
         try:
             est = {pid: minutes.estimate_minutes(client, pid) for pid in raw}
-            projections = minutes.apply_minutes(raw, est)
+            base = minutes.apply_minutes(raw, est)
         except Exception as exc:
             failures.append(f"minutes: {exc!r}")
-            projections = raw
+            base = raw
             est = {}
+        try:
+            dc_corr = defcon.DefConModel(client).corrections(
+                list(base), est, horizon=horizon
+            )
+        except Exception as exc:
+            failures.append(f"defcon: {exc!r}")
+            dc_corr = {}
+        projections = {
+            pid: [
+                round(x + (dc_corr.get(pid) or [0.0] * len(xs))[i], 3)
+                for i, x in enumerate(xs)
+            ]
+            for pid, xs in base.items()
+        }
     except Exception as exc:
         failures.append(f"projections: {exc!r}")
         est = {}
@@ -203,7 +219,8 @@ def take_snapshot(
         pid: xs for pid, xs in projections.items()
     }
     path = ledger.record_predictions(
-        gw, coverage, recommendation, partial=partial, failures=failures
+        gw, coverage, recommendation, partial=partial, failures=failures,
+        layers={"base": base, "defcon": dc_corr},
     )
     return path, partial, failures
 

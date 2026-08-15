@@ -106,6 +106,7 @@ def record_predictions(
     ledger_dir: str | Path | None = None,
     partial: bool = False,
     failures: list[str] | None = None,
+    layers: dict[str, dict] | None = None,
 ) -> Path:
     """Write the pre-deadline snapshot. Never overwrites an existing file.
 
@@ -128,7 +129,14 @@ def record_predictions(
             "projected": projected,
             "unprojected": len(projections) - projected,
         },
+        # "projections" is the FINAL number (base + corrections) and is
+        # what gets scored; "layers" preserves each component separately
+        # so we can score which layer earns its place.
         "projections": {str(pid): xs for pid, xs in projections.items()},
+        "layers": {
+            name: {str(pid): xs for pid, xs in vals.items()}
+            for name, vals in (layers or {}).items()
+        },
         "recommendation": recommendation,
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

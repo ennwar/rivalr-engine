@@ -12,7 +12,7 @@ import argparse
 import logging
 import sys
 
-from . import ledger, minutes, model, optimise, rivals
+from . import defcon, ledger, minutes, model, optimise, rivals
 from .fetch import FPLClient
 
 log = logging.getLogger("rivalr.report")
@@ -52,14 +52,34 @@ def build_brief(
         pid: minutes.estimate_minutes(client, pid)
         for pid in raw_projections
     }
-    projections = minutes.apply_minutes(raw_projections, est)
-    next_gw_proj = {pid: xs[0] for pid, xs in projections.items() if xs}
+    base = minutes.apply_minutes(raw_projections, est)
 
-    # Diagnostic: projections within 0.5 of the minutes-adjusted model
-    # floor (~1.7 for anyone who plays) carry no distinguishable signal.
+    # DefCon correction: additive, separate layer; base never overwritten.
+    try:
+        dc = defcon.DefConModel(client)
+        dc_corr = dc.corrections(list(base), est, horizon=horizon)
+    except Exception:
+        log.exception("DEFCON LAYER FAILED - proceeding with base projections")
+        dc_corr = {}
+    projections = {
+        pid: [
+            round(x + (dc_corr.get(pid) or [0.0] * len(xs))[i], 3)
+            for i, x in enumerate(xs)
+        ]
+        for pid, xs in base.items()
+    }
+    next_gw_proj = {pid: xs[0] for pid, xs in projections.items() if xs}
+    dc_next = {pid: (dc_corr.get(pid) or [0.0])[0] for pid in projections}
+
+    # Diagnostic: BASE projections within 0.5 of the minutes-adjusted
+    # model floor (~1.7 for anyone who plays) carry no distinguishable
+    # signal - the floor is an OpenFPL artifact, so the margin is
+    # computed on the base, not the DefCon-corrected final.
     margins = {
-        pid: round(model.confidence_margin(x, est[pid].factor if pid in est else 1.0), 2)
-        for pid, x in next_gw_proj.items()
+        pid: round(
+            model.confidence_margin(xs[0], est[pid].factor if pid in est else 1.0), 2
+        )
+        for pid, xs in base.items() if xs
     }
     low_conf = {
         pid for pid in margins
@@ -87,11 +107,13 @@ def build_brief(
     )
 
     # 4. Ledger snapshot (append-only, FULL bootstrap coverage - pool
-    # filtering is a solver concern, never a scoring concern).
+    # filtering is a solver concern, never a scoring concern). Layers
+    # logged separately: base (OpenFPL x minutes), defcon, final.
     chosen = plans.get(mode) or plans["points"]
     ledger.record_predictions(
         gw,
         ledger.full_coverage(projections, bootstrap["elements"]),
+        layers={"base": base, "defcon": dc_corr},
         recommendation={
             "team_id": team_id,
             "mode": mode,
@@ -108,7 +130,7 @@ def build_brief(
     # 5. Render.
     return render_brief(
         gw, rep, plans, mode, target_id, elements, next_gw_proj, est,
-        margins, low_conf,
+        margins, low_conf, dc_next,
     )
 
 
@@ -123,11 +145,14 @@ def render_brief(
     est: dict[int, minutes.MinutesEstimate],
     margins: dict[int, float] | None = None,
     low_conf: set[int] | None = None,
+    dc_next: dict[int, float] | None = None,
 ) -> str:
     L: list[str] = []
     P = lambda pid: _pname(elements, pid)
     margins = margins or {}
     low_conf = low_conf or set()
+
+    dc_next = dc_next or {}
 
     def lc(pid: int) -> str:
         """LOW_CONFIDENCE marker: projection within 0.5 of the model's
@@ -136,6 +161,11 @@ def render_brief(
         if pid in low_conf:
             return f" LOW_CONF(m{margins.get(pid, 0):+.1f})"
         return ""
+
+    def dc(pid: int) -> str:
+        """DefCon share of the projection, shown when material."""
+        v = dc_next.get(pid, 0.0)
+        return f" (+{v:.1f}dc)" if v >= 0.3 else ""
 
     L.append(f"RIVALR BRIEF - GW{gw}")
     L.append(f"{rep['league_name']}")
@@ -147,7 +177,7 @@ def render_brief(
         e = est.get(pid)
         flag = f"  ! {'; '.join(e.flags)}" if e and e.flags else ""
         cap = " (C)" if pid == rep.get("my_captain") else ""
-        L.append(f"  {P(pid):<18}{proj.get(pid, 0):>5.2f}{cap}{lc(pid)}{flag}")
+        L.append(f"  {P(pid):<18}{proj.get(pid, 0):>5.2f}{cap}{dc(pid)}{lc(pid)}{flag}")
     L.append(_hr())
 
     # League table with gaps
@@ -179,7 +209,7 @@ def render_brief(
     L.append("SWORDS AVAILABLE (low EO, high xPts)")
     for pid in rep["available_swords"][:8]:
         L.append(f"  {P(pid):<18}EO {float(eo.get(str(pid), 0)) * 100:.0f}%"
-                 f"  xPts {proj.get(pid, 0):.2f}{lc(pid)}")
+                 f"  xPts {proj.get(pid, 0):.2f}{dc(pid)}{lc(pid)}")
     L.append(_hr())
 
     # Transfer plans side by side
