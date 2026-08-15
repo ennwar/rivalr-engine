@@ -81,6 +81,45 @@ element id; Pos in G/D/M/F; the solver re-derives prices/teams from
 bootstrap-static). Options come from its `comprehensive_settings.json`
 plus our overrides (see `SOLVER_OVERRIDES` in `optimise.py`).
 
+## Web API
+
+```bash
+uv sync --extra api
+uv run uvicorn rivalr.api:app --port 8000
+```
+
+- `GET /health` — status, gameweek, deadline, last snapshot time
+- `GET /brief?team_id&league_id&mode&target` — the brief as JSON
+  (squad with base/defcon/flags, captain, transfers with per-rival
+  swings, rivals block, warnings). Slow solves return `{job_id}` (202);
+  poll `GET /brief/status?job_id=`.
+- `GET /league?league_id` — standings + entry ids for a target picker.
+
+Caching: Postgres via `DATABASE_URL` (in-memory fallback without it),
+keyed (team, league, mode, target, gw), TTL 1h, always bypassed inside
+the 4h pre-deadline window. Rate limit 30 req/min/IP. CORS allows
+localhost dev ports plus `RIVALR_CORS_ORIGINS` (comma-separated).
+Run a SINGLE uvicorn worker process — jobs and cache-bypass state are
+in-process.
+
+A rivals failure degrades to `rivals: null` plus a warning; squad and
+transfers still return.
+
+### Railway
+
+The Dockerfile serves both processes: web (default CMD, uvicorn) and
+worker (`python -m rivalr.worker` — the same hourly snapshot code path
+as the local Task Scheduler entry). Model artifacts (~750MB of OpenFPL
+joblibs) are NOT in the image: the entrypoint clones both vendor repos
+into `RIVALR_VENDOR_DIR` on first boot — mount a Railway volume at
+`/data` per service so it happens once. Env per service:
+`RIVALR_TEAM_ID`, `RIVALR_LEAGUE_ID`, `RIVALR_TELEGRAM_BOT_TOKEN`,
+`RIVALR_TELEGRAM_CHAT_ID`, `RIVALR_CORS_ORIGINS` (web),
+`DATABASE_URL` (web; from the Railway Postgres plugin). Once the
+Railway worker is verified, disable the local Task Scheduler entry
+(`schtasks /Change /TN rivalr-snapshot /DISABLE`) so one snapshot
+source is canonical.
+
 ## Known v0 limitations
 
 - **Cold start**: OpenFPL features use current-season FPL history; at GW1

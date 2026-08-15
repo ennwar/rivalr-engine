@@ -55,10 +55,13 @@ class FPLClient:
 
     def __init__(
         self,
-        cache_dir: str | Path = "data/cache",
+        cache_dir: str | Path | None = None,
         session: requests.Session | None = None,
         max_retries: int = 5,
     ) -> None:
+        import os
+        if cache_dir is None:
+            cache_dir = os.environ.get("RIVALR_CACHE_DIR", "data/cache")
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.session = session or requests.Session()

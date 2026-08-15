@@ -40,7 +40,9 @@ from .fetch import FPLClient
 
 log = logging.getLogger("rivalr.ledger")
 
-LEDGER_DIR = Path("logs/predictions")
+import os
+
+LEDGER_DIR = Path(os.environ.get("RIVALR_LEDGER_DIR", "logs/predictions"))
 
 LEGACY_BUCKETS = [
     ("Zeros", 0, 0),

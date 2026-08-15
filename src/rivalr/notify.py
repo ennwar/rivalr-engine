@@ -36,14 +36,21 @@ CHAT_KEY = "RIVALR_TELEGRAM_CHAT_ID"
 
 
 def _load_env(path: Path = ENV_FILE) -> dict[str, str]:
+    """.env file first; RIVALR_-prefixed process env fills gaps (Railway
+    injects config that way). The prefix rule means no other project's
+    credentials can ever be picked up."""
+    import os
+
     env: dict[str, str] = {}
-    if not path.exists():
-        return env
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, _, v = line.partition("=")
-            env[k.strip()] = v.strip()
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                env[k.strip()] = v.strip()
+    for k, v in os.environ.items():
+        if k.startswith("RIVALR_") and not env.get(k):
+            env[k] = v
     return env
 
 

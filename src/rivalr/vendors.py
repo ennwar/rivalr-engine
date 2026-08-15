@@ -14,8 +14,11 @@ from pathlib import Path
 
 log = logging.getLogger("rivalr.vendors")
 
+import os
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-VENDOR_DIR = REPO_ROOT / "vendor"
+# RIVALR_VENDOR_DIR lets deployments point at a persistent volume.
+VENDOR_DIR = Path(os.environ.get("RIVALR_VENDOR_DIR", REPO_ROOT / "vendor"))
 OPENFPL_DIR = VENDOR_DIR / "OpenFPL"
 OPTIMIZER_DIR = VENDOR_DIR / "FPL-Optimization-Tools"
 
