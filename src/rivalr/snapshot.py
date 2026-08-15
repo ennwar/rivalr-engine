@@ -94,21 +94,33 @@ def _alert(gw: int, message: str) -> None:
         f.write(f"{stamp}  {message}\n")
     log.error("ALERT: %s (written to %s)", message, path)
     try:  # toast is nice-to-have; never let it break the run
+        # LoadXml pattern: PS 5.1's WinRT DOM enumeration
+        # (GetElementsByTagName indexing) is broken on this machine -
+        # verified 2026-08-15, see dry-run notes.
+        safe = (message.replace("&", "&amp;").replace("<", "&lt;")
+                       .replace(">", "&gt;").replace("'", "&apos;"))
+        xml = ("<toast><visual><binding template=\"ToastText02\">"
+               "<text id=\"1\">rivalr snapshot</text>"
+               f"<text id=\"2\">{safe}</text>"
+               "</binding></visual></toast>")
         ps = (
             "[Windows.UI.Notifications.ToastNotificationManager, "
-            "Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; "
-            "$t = [Windows.UI.Notifications.ToastTemplateType]::ToastText02; "
-            "$x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($t); "
-            "$x.GetElementsByTagName('text')[0].AppendChild($x.CreateTextNode('rivalr snapshot')) | Out-Null; "
-            f"$x.GetElementsByTagName('text')[1].AppendChild($x.CreateTextNode('{message}')) | Out-Null; "
-            "$n = [Windows.UI.Notifications.ToastNotification]::new($x); "
-            "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('rivalr')"
-            ".Show($n)"
+            "Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null; "
+            "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, "
+            "ContentType=WindowsRuntime] | Out-Null; "
+            "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument; "
+            f"$xml.LoadXml('{xml}'); "
+            "$n = [Windows.UI.Notifications.ToastNotification]::new($xml); "
+            "[Windows.UI.Notifications.ToastNotificationManager]"
+            "::CreateToastNotifier('rivalr').Show($n)"
         )
-        subprocess.run(
+        r = subprocess.run(
             ["powershell", "-NoProfile", "-Command", ps],
-            capture_output=True, timeout=20,
+            capture_output=True, text=True, timeout=20,
         )
+        if r.returncode != 0 or r.stderr.strip():
+            log.warning("toast failed (alert file still written): %s",
+                        r.stderr.strip()[:200])
     except Exception:
         log.warning("toast notification failed (alert file still written)")
 
@@ -144,6 +156,14 @@ def take_snapshot(
     elements: list[dict] = []
     projections: dict[int, list[float]] = {}
     recommendation: dict = {"team_id": team_id, "mode": mode, "target_id": target_id}
+
+    # Injury flags move in the hours before a deadline: bypass the 6h TTL
+    # and force a fresh bootstrap-static. On failure, fall back to the
+    # cached copy (its age is logged by the caller).
+    try:
+        client.get("bootstrap-static/", force=True)
+    except Exception as exc:
+        log.warning("fresh bootstrap fetch failed, using cached copy: %r", exc)
 
     try:
         elements = client.bootstrap()["elements"]
@@ -218,9 +238,21 @@ def take_snapshot(
     coverage = ledger.full_coverage(projections, elements) if elements else {
         pid: xs for pid, xs in projections.items()
     }
+    # What we knew at snapshot time: news + availability per player, so
+    # post-GW scoring can separate "we knew" from "we couldn't have".
+    availability = {
+        el["id"]: {
+            "status": el.get("status"),
+            "news": el.get("news") or "",
+            "news_added": el.get("news_added"),
+            "chance_of_playing_next_round": el.get("chance_of_playing_next_round"),
+        }
+        for el in elements
+    }
     path = ledger.record_predictions(
         gw, coverage, recommendation, partial=partial, failures=failures,
         layers={"base": base, "defcon": dc_corr},
+        availability=availability,
     )
     return path, partial, failures
 
@@ -288,11 +320,13 @@ def main() -> int:
         return 2
 
     pushed = _git_publish(gw, path, partial)
+    age = client.cache_age("bootstrap-static/")
     _log_run({
         "gw": gw, "action": "written", "partial": partial,
         "failures": failures, "ledger_file": path.name,
         "pushed": pushed,
         "elements": n_elements,
+        "bootstrap_age_s": round(age, 1) if age is not None else None,
         "deadline": deadline.isoformat(),
     })
     if partial:

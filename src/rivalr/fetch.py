@@ -165,6 +165,17 @@ class FPLClient:
     def event_live(self, gw: int) -> dict:
         return self.get(f"event/{gw}/live/")
 
+    def cache_age(self, path: str = "bootstrap-static/") -> float | None:
+        """Seconds since the cached copy of a path was fetched, or None."""
+        cache_file = self._cache_path(path.lstrip("/"), None)
+        if not cache_file.exists():
+            return None
+        try:
+            payload = json.loads(cache_file.read_text(encoding="utf-8"))
+            return time.time() - payload["fetched_at"]
+        except (json.JSONDecodeError, OSError, KeyError):
+            return None
+
     # -- convenience -------------------------------------------------------
 
     def current_gw(self) -> int:

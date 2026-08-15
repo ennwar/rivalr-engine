@@ -107,6 +107,7 @@ def record_predictions(
     partial: bool = False,
     failures: list[str] | None = None,
     layers: dict[str, dict] | None = None,
+    availability: dict[int, dict] | None = None,
 ) -> Path:
     """Write the pre-deadline snapshot. Never overwrites an existing file.
 
@@ -136,6 +137,11 @@ def record_predictions(
         "layers": {
             name: {str(pid): xs for pid, xs in vals.items()}
             for name, vals in (layers or {}).items()
+        },
+        # Point-in-time knowledge: news/flags as they stood at snapshot,
+        # for later "what we knew vs what happened" scoring.
+        "availability": {
+            str(pid): a for pid, a in (availability or {}).items()
         },
         "recommendation": recommendation,
     }
