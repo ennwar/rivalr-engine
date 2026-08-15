@@ -37,6 +37,7 @@ from pathlib import Path
 
 from . import defcon, ledger, minutes, model, optimise, rivals, uncertainty
 from .fetch import FPLClient
+from .notify import telegram_send
 
 log = logging.getLogger("rivalr.snapshot")
 
@@ -133,6 +134,36 @@ def _next_deadline(client: FPLClient) -> tuple[int, datetime]:
     raise RuntimeError("no upcoming gameweek in bootstrap-static")
 
 
+def _check_missed_windows(client: FPLClient, now: datetime) -> None:
+    """Heartbeat: if any deadline passed in the last 24h with NO snapshot
+    written, alarm once (marker file prevents repeats). Silence must
+    never mean 'probably fine'."""
+    try:
+        events = client.bootstrap()["events"]
+    except Exception:
+        return
+    for ev in events:
+        dt = datetime.fromisoformat(ev["deadline_time"].replace("Z", "+00:00"))
+        if not (timedelta(0) <= now - dt <= timedelta(hours=24)):
+            continue
+        gw = ev["id"]
+        if _has_snapshot(gw):
+            continue
+        marker = ledger.LEDGER_DIR / f"MISSED_gw{gw}.txt"
+        if marker.exists():
+            continue
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(f"{now.isoformat()} window closed, no snapshot\n",
+                          encoding="utf-8")
+        msg = (f"rivalr ALARM: GW{gw} deadline ({ev['deadline_time']}) "
+               f"passed with NO ledger snapshot written. The machine was "
+               f"probably off/asleep during the window.")
+        _alert(gw, msg)
+        telegram_send(msg)
+        _log_run({"gw": gw, "action": "missed-window",
+                  "deadline": ev["deadline_time"]})
+
+
 def _has_snapshot(gw: int) -> bool:
     try:
         ledger._latest_ledger_for(gw, ledger.LEDGER_DIR)
@@ -227,13 +258,19 @@ def take_snapshot(
                     mgr = uncertainty.player_flags(client)
                 except Exception:
                     mgr = {}
+                ins = chosen.get("transfers_in", [])
                 recommendation.update(
-                    transfers_in=chosen.get("transfers_in", []),
+                    transfers_in=ins,
                     transfers_out=chosen.get("transfers_out", []),
                     captain=chosen.get("captain"),
                     expected_points=chosen.get("expected_points"),
                     manager_change_ins=[
-                        p for p in chosen.get("transfers_in", []) if p in mgr
+                        p for p in ins
+                        if "MGR_CHG" in mgr.get(p, {}).get("kinds", [])
+                    ],
+                    new_club_ins=[
+                        p for p in ins
+                        if "NEW_CLUB" in mgr.get(p, {}).get("kinds", [])
                     ],
                 )
             else:
@@ -298,6 +335,7 @@ def main() -> int:
 
     now = datetime.now(timezone.utc)
     if args.auto:
+        _check_missed_windows(client, now)
         if now < deadline - timedelta(hours=WINDOW_HOURS) or now >= deadline:
             _log_run({
                 "gw": gw, "action": "skip-outside-window",
@@ -321,7 +359,9 @@ def main() -> int:
         )
     except Exception as exc:
         # The one thing that must never fail, failed. Scream.
-        _alert(gw, f"LEDGER SNAPSHOT FAILED for gw{gw}: {exc!r}")
+        msg = f"LEDGER SNAPSHOT FAILED for gw{gw}: {exc!r}"
+        _alert(gw, msg)
+        telegram_send(f"rivalr ALARM: {msg}")
         _log_run({"gw": gw, "action": "failed", "error": repr(exc),
                   "elements": n_elements, "deadline": deadline.isoformat()})
         return 2
@@ -336,6 +376,29 @@ def main() -> int:
         "bootstrap_age_s": round(age, 1) if age is not None else None,
         "deadline": deadline.isoformat(),
     })
+
+    # Confirmation to Telegram (works while asleep/away, unlike toasts).
+    try:
+        snap = json.loads(path.read_text(encoding="utf-8"))
+        cov = snap.get("coverage", {})
+        players_line = (f"{cov.get('projected', '?')}/"
+                        f"{cov.get('bootstrap_elements_at_snapshot', '?')} projected")
+    except Exception:
+        players_line = "?"
+    status = "PARTIAL" if partial else "OK"
+    msg = (
+        f"rivalr GW{gw} snapshot {status}\n"
+        f"time: {datetime.now(timezone.utc).isoformat(timespec='seconds')}\n"
+        f"file: {path.name}\n"
+        f"players: {players_line}\n"
+        f"partial: {partial}\n"
+        f"bootstrap age: {age:.0f}s\n"
+        f"pushed to GitHub: {pushed}"
+    )
+    if failures:
+        msg += "\nfailures: " + "; ".join(failures)
+    telegram_send(msg)
+
     if partial:
         _alert(gw, f"gw{gw} snapshot written but PARTIAL: {'; '.join(failures)}")
         return 1

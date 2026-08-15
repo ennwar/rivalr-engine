@@ -133,7 +133,12 @@ def build_brief(
                 p for p in chosen.get("transfers_in", []) if p in low_conf
             ],
             "manager_change_ins": [
-                p for p in chosen.get("transfers_in", []) if p in mgr_flags
+                p for p in chosen.get("transfers_in", [])
+                if "MGR_CHG" in mgr_flags.get(p, {}).get("kinds", [])
+            ],
+            "new_club_ins": [
+                p for p in chosen.get("transfers_in", [])
+                if "NEW_CLUB" in mgr_flags.get(p, {}).get("kinds", [])
             ],
         },
     )
@@ -168,9 +173,12 @@ def render_brief(
     mgr_flags = mgr_flags or {}
 
     def mc(pid: int) -> str:
-        """Manager-change marker: projection rests on the previous
-        regime's tactical patterns (see uncertainty.py)."""
-        return " MGR_CHG" if pid in mgr_flags else ""
+        """Uncertainty markers: MGR_CHG (club changed manager) and/or
+        NEW_CLUB (player transferred; rates from a different system)."""
+        info = mgr_flags.get(pid)
+        if not info:
+            return ""
+        return "".join(f" {k}" for k in info.get("kinds", []))
 
     def lc(pid: int) -> str:
         """LOW_CONFIDENCE marker: projection within 0.5 of the model's
@@ -192,14 +200,21 @@ def render_brief(
     # Manager-change watchlist: which clubs' projections still rest on
     # last season's tactical assumptions.
     changed = {}
+    n_new_club = 0
     for info in mgr_flags.values():
-        changed[info["team"]] = info
+        if "team" in info:
+            changed[info["team"]] = info
+        if "NEW_CLUB" in info.get("kinds", []):
+            n_new_club += 1
     if changed:
         L.append("MANAGER CHANGES (uncertain until 5 matches)")
         for team in sorted(changed):
             i = changed[team]
             L.append(f"  {team}: {i['new']} in ({i['out']} out), "
                      f"{i['matches_played']}/5 played")
+        if n_new_club:
+            L.append(f"  + {n_new_club} transferred players carry NEW_CLUB "
+                     f"(rates from old system)")
         L.append(_hr())
 
     # My squad + projections + flags
@@ -264,10 +279,16 @@ def render_brief(
         n_lc = sum(1 for p in ins if p in low_conf)
         if n_lc:
             L.append(f"  ! {n_lc} incoming pick(s) rest on LOW_CONF projections")
-        n_mc = sum(1 for p in ins if p in mgr_flags)
+        n_mc = sum(1 for p in ins
+                   if "MGR_CHG" in mgr_flags.get(p, {}).get("kinds", []))
         if n_mc:
             L.append(f"  ! {n_mc} incoming pick(s) rest on last season's "
                      f"tactics (MGR_CHG)")
+        n_nc = sum(1 for p in ins
+                   if "NEW_CLUB" in mgr_flags.get(p, {}).get("kinds", []))
+        if n_nc:
+            L.append(f"  ! {n_nc} incoming pick(s) transferred clubs this "
+                     f"summer (NEW_CLUB)")
         L.append(f"  xPts horizon: {plan.get('expected_points', 0):.1f}"
                  f"  hits: {plan.get('hits', 0)}")
         if plan.get("reasoning"):

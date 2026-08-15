@@ -4,7 +4,23 @@ from rivalr import uncertainty
 from rivalr.uncertainty import player_flags, team_flags
 
 
+import csv
+
+
+def make_prior_files(cache_dir):
+    """Empty 2025-26 prior files: no transfers, no network."""
+    with open(cache_dir / "vaastav_2025-26_players_raw.csv", "w", newline="") as f:
+        csv.DictWriter(f, fieldnames=["code", "team"]).writeheader()
+    with open(cache_dir / "vaastav_2025-26_teams.csv", "w", newline="") as f:
+        csv.DictWriter(f, fieldnames=["id", "name"]).writeheader()
+
+
 class StubClient:
+    cache_dir = "."
+
+    def element_summary(self, pid):
+        return {"history": []}
+
     def __init__(self, finished_per_team: dict[int, int]):
         self._teams = [
             {"id": 1, "name": "Man City"},
@@ -46,12 +62,14 @@ def test_unchanged_club_never_flagged():
     assert 2 not in flags  # Arsenal: Arteta continuing
 
 
-def test_player_flags_cover_changed_clubs_only():
+def test_player_flags_cover_changed_clubs_only(tmp_path):
+    make_prior_files(tmp_path)
     client = StubClient({1: 0, 3: 5})
+    client.cache_dir = tmp_path
     pf = player_flags(client)
-    assert 10 in pf          # City player, 0 matches -> flagged
-    assert 11 not in pf      # Arsenal player -> never
-    assert 12 not in pf      # Liverpool settled after 5
+    assert "MGR_CHG" in pf[10]["kinds"]   # City player, 0 matches -> flagged
+    assert 11 not in pf                    # Arsenal player -> never
+    assert 12 not in pf                    # Liverpool settled after 5
 
 
 def test_all_config_teams_resolve_against_real_names():

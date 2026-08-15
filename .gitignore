@@ -9,3 +9,5 @@ dist/
 logs/snapshot_task.log
 logs/predictions/run_log.jsonl
 logs/predictions/ALERT_*.txt
+.env
+logs/predictions/MISSED_*.txt
