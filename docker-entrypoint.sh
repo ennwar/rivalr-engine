@@ -17,4 +17,12 @@ if [ ! -f "${RIVALR_VENDOR_DIR}/FPL-Optimization-Tools/dev/solver.py" ]; then
         "${RIVALR_VENDOR_DIR}/FPL-Optimization-Tools"
 fi
 
+# Role switch: RIVALR_ROLE=worker turns this same image into the hourly
+# scheduler, so a worker service needs only an env var, no custom start
+# command.
+if [ "${RIVALR_ROLE:-web}" = "worker" ]; then
+    echo "entrypoint: RIVALR_ROLE=worker -> hourly scheduler"
+    exec python -m rivalr.worker
+fi
+
 exec "$@"
