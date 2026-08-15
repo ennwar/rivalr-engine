@@ -317,9 +317,25 @@ def render_brief(
 
 
 def main() -> None:
+    # Defaults from .env (RIVALR_TEAM_ID / RIVALR_LEAGUE_ID) so the bare
+    # `python -m rivalr.report` works; flags still override.
+    from .notify import _load_env
+
+    env = _load_env()
+    default_team = env.get("RIVALR_TEAM_ID")
+    default_league = env.get("RIVALR_LEAGUE_ID")
+
     parser = argparse.ArgumentParser(description="Generate the gameweek brief")
-    parser.add_argument("--team", type=int, required=True, help="your FPL entry id")
-    parser.add_argument("--league", type=int, required=True, help="classic league id")
+    parser.add_argument(
+        "--team", type=int, required=default_team is None,
+        default=int(default_team) if default_team else None,
+        help="your FPL entry id (default: RIVALR_TEAM_ID from .env)",
+    )
+    parser.add_argument(
+        "--league", type=int, required=default_league is None,
+        default=int(default_league) if default_league else None,
+        help="classic league id (default: RIVALR_LEAGUE_ID from .env)",
+    )
     parser.add_argument(
         "--mode", choices=["points", "chase", "defend"], default="points"
     )
