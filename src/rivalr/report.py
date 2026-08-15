@@ -12,7 +12,7 @@ import argparse
 import logging
 import sys
 
-from . import defcon, ledger, minutes, model, optimise, rivals
+from . import defcon, ledger, minutes, model, optimise, rivals, uncertainty
 from .fetch import FPLClient
 
 log = logging.getLogger("rivalr.report")
@@ -86,6 +86,14 @@ def build_brief(
         if margins[pid] <= model.LOW_CONFIDENCE_MARGIN
     }
 
+    # Manager-change uncertainty: projections for these clubs rest on the
+    # previous regime's tactical patterns until 5 matches of 2026-27.
+    try:
+        mgr_flags = uncertainty.player_flags(client)
+    except Exception:
+        log.exception("manager-change flags unavailable")
+        mgr_flags = {}
+
     # 2. Mini-league intelligence.
     log.info("building rivals report...")
     rep = rivals.build_rivals_report(
@@ -124,13 +132,16 @@ def build_brief(
             "low_confidence_ins": [
                 p for p in chosen.get("transfers_in", []) if p in low_conf
             ],
+            "manager_change_ins": [
+                p for p in chosen.get("transfers_in", []) if p in mgr_flags
+            ],
         },
     )
 
     # 5. Render.
     return render_brief(
         gw, rep, plans, mode, target_id, elements, next_gw_proj, est,
-        margins, low_conf, dc_next,
+        margins, low_conf, dc_next, mgr_flags,
     )
 
 
@@ -146,6 +157,7 @@ def render_brief(
     margins: dict[int, float] | None = None,
     low_conf: set[int] | None = None,
     dc_next: dict[int, float] | None = None,
+    mgr_flags: dict[int, dict] | None = None,
 ) -> str:
     L: list[str] = []
     P = lambda pid: _pname(elements, pid)
@@ -153,6 +165,12 @@ def render_brief(
     low_conf = low_conf or set()
 
     dc_next = dc_next or {}
+    mgr_flags = mgr_flags or {}
+
+    def mc(pid: int) -> str:
+        """Manager-change marker: projection rests on the previous
+        regime's tactical patterns (see uncertainty.py)."""
+        return " MGR_CHG" if pid in mgr_flags else ""
 
     def lc(pid: int) -> str:
         """LOW_CONFIDENCE marker: projection within 0.5 of the model's
@@ -171,13 +189,26 @@ def render_brief(
     L.append(f"{rep['league_name']}")
     L.append(_hr("="))
 
+    # Manager-change watchlist: which clubs' projections still rest on
+    # last season's tactical assumptions.
+    changed = {}
+    for info in mgr_flags.values():
+        changed[info["team"]] = info
+    if changed:
+        L.append("MANAGER CHANGES (uncertain until 5 matches)")
+        for team in sorted(changed):
+            i = changed[team]
+            L.append(f"  {team}: {i['new']} in ({i['out']} out), "
+                     f"{i['matches_played']}/5 played")
+        L.append(_hr())
+
     # My squad + projections + flags
     L.append("MY SQUAD (next-GW xPts)")
     for pid in sorted(rep["my_squad"], key=lambda p: -proj.get(p, 0)):
         e = est.get(pid)
         flag = f"  ! {'; '.join(e.flags)}" if e and e.flags else ""
         cap = " (C)" if pid == rep.get("my_captain") else ""
-        L.append(f"  {P(pid):<18}{proj.get(pid, 0):>5.2f}{cap}{dc(pid)}{lc(pid)}{flag}")
+        L.append(f"  {P(pid):<18}{proj.get(pid, 0):>5.2f}{cap}{dc(pid)}{lc(pid)}{mc(pid)}{flag}")
     L.append(_hr())
 
     # League table with gaps
@@ -209,7 +240,7 @@ def render_brief(
     L.append("SWORDS AVAILABLE (low EO, high xPts)")
     for pid in rep["available_swords"][:8]:
         L.append(f"  {P(pid):<18}EO {float(eo.get(str(pid), 0)) * 100:.0f}%"
-                 f"  xPts {proj.get(pid, 0):.2f}{dc(pid)}{lc(pid)}")
+                 f"  xPts {proj.get(pid, 0):.2f}{dc(pid)}{lc(pid)}{mc(pid)}")
     L.append(_hr())
 
     # Transfer plans side by side
@@ -227,12 +258,16 @@ def render_brief(
         if not ins:
             L.append("  roll the transfer")
         for pid_out, pid_in in zip(outs, ins):
-            L.append(f"  OUT {P(pid_out):<16} IN {P(pid_in)}{lc(pid_in)}")
+            L.append(f"  OUT {P(pid_out):<16} IN {P(pid_in)}{lc(pid_in)}{mc(pid_in)}")
         for pid_in in ins[len(outs):]:  # draft mode: no outs
-            L.append(f"  IN {P(pid_in)}{lc(pid_in)}")
+            L.append(f"  IN {P(pid_in)}{lc(pid_in)}{mc(pid_in)}")
         n_lc = sum(1 for p in ins if p in low_conf)
         if n_lc:
             L.append(f"  ! {n_lc} incoming pick(s) rest on LOW_CONF projections")
+        n_mc = sum(1 for p in ins if p in mgr_flags)
+        if n_mc:
+            L.append(f"  ! {n_mc} incoming pick(s) rest on last season's "
+                     f"tactics (MGR_CHG)")
         L.append(f"  xPts horizon: {plan.get('expected_points', 0):.1f}"
                  f"  hits: {plan.get('hits', 0)}")
         if plan.get("reasoning"):

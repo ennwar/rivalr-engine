@@ -35,7 +35,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import defcon, ledger, minutes, model, optimise, rivals
+from . import defcon, ledger, minutes, model, optimise, rivals, uncertainty
 from .fetch import FPLClient
 
 log = logging.getLogger("rivalr.snapshot")
@@ -223,11 +223,18 @@ def take_snapshot(
             )
             chosen = plans.get(mode) or plans.get("points")
             if chosen:
+                try:
+                    mgr = uncertainty.player_flags(client)
+                except Exception:
+                    mgr = {}
                 recommendation.update(
                     transfers_in=chosen.get("transfers_in", []),
                     transfers_out=chosen.get("transfers_out", []),
                     captain=chosen.get("captain"),
                     expected_points=chosen.get("expected_points"),
+                    manager_change_ins=[
+                        p for p in chosen.get("transfers_in", []) if p in mgr
+                    ],
                 )
             else:
                 failures.append("solver: all modes returned None")
