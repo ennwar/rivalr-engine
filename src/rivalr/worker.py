@@ -1,11 +1,18 @@
-"""Railway worker: the hourly scheduler, same code path as local.
+"""Railway worker: hourly scheduler + brief pre-warmer.
 
     python -m rivalr.worker
 
-Runs snapshot --auto once an hour, forever. Identical logic to the
-Windows Task Scheduler entry - do not run both against the same league
-long-term or every window produces a local AND a cloud snapshot
-(append-only versioning keeps both, but pick one as canonical).
+Each tick: run snapshot --auto (same code path as the local Task
+Scheduler entry), then pre-warm the brief cache so visitors never sit
+through a cold solve:
+
+  - post-GW settle: once a gameweek's data is checked, re-solve every
+    requested pair (marker file prevents repeats)
+  - pre-deadline: within 6h of the deadline, keep entries fresher than
+    the API's 30-min window freshness (tick interval drops to 15 min)
+  - quiet periods: refresh entries older than 6h
+
+Only genuinely new team/league pairs ever hit a cold solve.
 """
 
 from __future__ import annotations
@@ -14,10 +21,65 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 log = logging.getLogger("rivalr.worker")
 
 INTERVAL_S = 3600
+INTERVAL_NEAR_DEADLINE_S = 900
+PREWARM_WINDOW_H = 6
+MAX_SOLVES_PER_TICK = 8
+
+
+def prewarm_tick() -> None:
+    from . import briefdata, ledger, snapshot
+    from .fetch import FPLClient
+    from .store import STALE_REFRESH_S, WINDOW_TTL_S, make_store
+
+    st = make_store()
+    client = FPLClient()
+    gw, deadline = snapshot._next_deadline(client)
+    hours_to_dl = (deadline - datetime.now(timezone.utc)).total_seconds() / 3600
+
+    # post-GW settle: force-refresh everything once per settled gameweek
+    force = False
+    settled = [
+        ev["id"] for ev in client.bootstrap()["events"]
+        if ev.get("finished") and ev.get("data_checked")
+    ]
+    marker = None
+    if settled:
+        marker = ledger.LEDGER_DIR / f"WARMED_after_gw{max(settled)}.txt"
+        force = not marker.exists()
+
+    if force:
+        threshold = 0
+    elif hours_to_dl <= PREWARM_WINDOW_H:
+        threshold = WINDOW_TTL_S  # keep fresher than the API's window bar
+    else:
+        threshold = STALE_REFRESH_S
+
+    keys = st.stale_keys(gw, threshold)[:MAX_SOLVES_PER_TICK]
+    if not keys:
+        log.info("prewarm: nothing stale (%d pairs tracked)", len(st.pairs()))
+        return
+    log.info("prewarm: %d pair(s) to refresh (threshold %ds, force=%s)",
+             len(keys), threshold, force)
+    for team, league, mode, target, key_gw in keys:
+        try:
+            payload = briefdata.build_brief_json(
+                client, team, league, mode=mode, target_id=target or None,
+            )
+            st.put((team, league, mode, target, key_gw), payload)
+            log.info("prewarm: cached %s/%s %s target=%s", team, league,
+                     mode, target or "-")
+        except Exception:
+            log.exception("prewarm failed for %s/%s (continuing)", team, league)
+    if force and marker is not None:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+
+    return
 
 
 def _serve_health() -> None:
@@ -67,7 +129,24 @@ def main() -> None:
             log.info("snapshot --auto exited %s", exc.code)
         except Exception:
             log.exception("worker iteration failed (continuing)")
-        time.sleep(INTERVAL_S)
+
+        try:
+            prewarm_tick()
+        except Exception:
+            log.exception("prewarm tick failed (continuing)")
+
+        # Tick faster near the deadline so window-fresh entries exist.
+        interval = INTERVAL_S
+        try:
+            from .fetch import FPLClient
+
+            _, deadline = snapshot._next_deadline(FPLClient())
+            hrs = (deadline - datetime.now(timezone.utc)).total_seconds() / 3600
+            if 0 <= hrs <= PREWARM_WINDOW_H + 1:
+                interval = INTERVAL_NEAR_DEADLINE_S
+        except Exception:
+            pass
+        time.sleep(interval)
 
 
 if __name__ == "__main__":

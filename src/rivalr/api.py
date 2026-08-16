@@ -85,85 +85,11 @@ async def rate_limit(request: Request, call_next):
     return await call_next(request)
 
 
-# -- cache -----------------------------------------------------------------
+# -- store (cache + pair tracking) ----------------------------------------
 
+from .store import SERVE_TTL_S, WINDOW_TTL_S, make_store  # noqa: E402
 
-class MemoryCache:
-    def __init__(self) -> None:
-        self._d: dict[tuple, tuple[float, dict]] = {}
-
-    def get(self, key: tuple) -> dict | None:
-        hit = self._d.get(key)
-        if hit and time.time() - hit[0] < CACHE_TTL_S:
-            return hit[1]
-        return None
-
-    def put(self, key: tuple, payload: dict) -> None:
-        self._d[key] = (time.time(), payload)
-
-
-class PgCache:
-    DDL = """
-    CREATE TABLE IF NOT EXISTS brief_cache (
-        team_id BIGINT NOT NULL,
-        league_id BIGINT NOT NULL,
-        mode TEXT NOT NULL,
-        target BIGINT NOT NULL,
-        gw INT NOT NULL,
-        payload JSONB NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        PRIMARY KEY (team_id, league_id, mode, target, gw)
-    )"""
-
-    def __init__(self, dsn: str) -> None:
-        import psycopg
-
-        self._psycopg = psycopg
-        self._dsn = dsn
-        with psycopg.connect(dsn) as conn:
-            conn.execute(self.DDL)
-            conn.commit()
-
-    def get(self, key: tuple) -> dict | None:
-        team, league, mode, target, gw = key
-        with self._psycopg.connect(self._dsn) as conn:
-            row = conn.execute(
-                "SELECT payload FROM brief_cache WHERE team_id=%s AND "
-                "league_id=%s AND mode=%s AND target=%s AND gw=%s AND "
-                "created_at > now() - interval '1 hour'",
-                (team, league, mode, target or 0, gw),
-            ).fetchone()
-        return row[0] if row else None
-
-    def put(self, key: tuple, payload: dict) -> None:
-        team, league, mode, target, gw = key
-        with self._psycopg.connect(self._dsn) as conn:
-            conn.execute(
-                "INSERT INTO brief_cache "
-                "(team_id, league_id, mode, target, gw, payload, created_at) "
-                "VALUES (%s,%s,%s,%s,%s,%s,now()) "
-                "ON CONFLICT (team_id, league_id, mode, target, gw) "
-                "DO UPDATE SET payload=EXCLUDED.payload, created_at=now()",
-                (team, league, mode, target or 0, gw, json.dumps(payload)),
-            )
-            conn.commit()
-
-
-def _make_cache():
-    dsn = os.environ.get("DATABASE_URL")
-    if dsn:
-        try:
-            c = PgCache(dsn)
-            log.info("brief cache: postgres")
-            return c
-        except Exception:
-            log.exception("postgres cache unavailable, using in-memory")
-    else:
-        log.warning("DATABASE_URL not set - in-memory brief cache")
-    return MemoryCache()
-
-
-cache = _make_cache()
+cache = make_store()
 
 
 # -- job queue -------------------------------------------------------------
@@ -192,6 +118,16 @@ def _run_job(jid: str, key: tuple, kwargs: dict) -> None:
         cache.put(key, payload)
         with _jobs_lock:
             _jobs[jid].update(status="done", result=payload)
+            notify = _jobs[jid].get("notify")
+        if notify:
+            from .notify import telegram_send_to
+
+            telegram_send_to(
+                notify,
+                f"rivalr: your GW{payload.get('gameweek', '?')} brief for "
+                f"team {key[0]} is ready - reload the page and it will be "
+                f"instant.",
+            )
     except Exception as exc:
         log.exception("brief job failed")
         with _jobs_lock:
@@ -250,16 +186,35 @@ def brief(
     league_id: int = Query(...),
     mode: str = Query("points", pattern="^(points|chase|defend)$"),
     target: int | None = Query(None),
+    notify_chat_id: str | None = Query(None, max_length=32),
 ):
     _gc_jobs()
     client = client_factory()
     gw, deadline = _gw_and_deadline(client)
     key = (team_id, league_id, mode, target or 0, gw)
 
-    if not _in_pre_deadline_window(deadline):
-        cached = cache.get(key)
-        if cached is not None:
-            return {"cached": True, **cached}
+    # Track the pair so the worker pre-warms it from now on (best-effort).
+    try:
+        cache.record_pair(team_id, league_id, mode, target)
+    except Exception:
+        log.warning("pair tracking failed", exc_info=True)
+
+    # Inside the pre-deadline window only a FRESH entry qualifies (the
+    # worker pre-warms during the window, so pre-warmed briefs still
+    # serve instantly); outside it, the normal TTL applies.
+    max_age = (
+        WINDOW_TTL_S if _in_pre_deadline_window(deadline) else SERVE_TTL_S
+    )
+    cached = cache.get(key, max_age_s=max_age)
+    if cached is not None:
+        return {"cached": True, **cached}
+
+    # A pair with no cache entry EVER is a genuinely-new visitor: the UI
+    # gets told honestly that the first solve takes minutes.
+    try:
+        first_time = not cache.ever_cached(team_id, league_id)
+    except Exception:
+        first_time = False
 
     kwargs = dict(team_id=team_id, league_id=league_id, mode=mode,
                   target_id=target)
@@ -268,7 +223,7 @@ def brief(
         job = _jobs.get(jid) if jid else None
         # Reuse only in-flight jobs. A done job must NOT serve as a shadow
         # cache - the real cache handles freshness (and the pre-deadline
-        # window deliberately bypasses it).
+        # window deliberately tightens it).
         if job is None or job["status"] not in ("queued", "running"):
             jid = uuid.uuid4().hex
             _jobs[jid] = {"status": "queued", "created": time.time(),
@@ -276,6 +231,8 @@ def brief(
             _jobs_by_key[key] = jid
             _executor.submit(_run_job, jid, key, kwargs)
             job = _jobs[jid]
+        if notify_chat_id:
+            _jobs[jid]["notify"] = notify_chat_id
 
     deadline_t = time.time() + SYNC_WAIT_S
     while time.time() < deadline_t:
@@ -286,7 +243,10 @@ def brief(
             if status == "failed":
                 raise HTTPException(500, _jobs[jid].get("error", "solve failed"))
         time.sleep(0.25)
-    return JSONResponse({"job_id": jid, "status": "pending"}, status_code=202)
+    return JSONResponse(
+        {"job_id": jid, "status": "pending", "first_time": first_time},
+        status_code=202,
+    )
 
 
 @app.get("/brief/status")

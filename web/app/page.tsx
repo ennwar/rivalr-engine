@@ -143,7 +143,11 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [firstTime, setFirstTime] = useState(false);
+  const [notifyChatId, setNotifyChatId] = useState("");
+  const [notifySent, setNotifySent] = useState(false);
   const runId = useRef(0);
+  const lastQuery = useRef("");
 
   const countdown = useCountdown(brief?.deadline ?? null);
 
@@ -153,6 +157,8 @@ export default function Page() {
       setLoading(true);
       setError(null);
       setElapsed(0);
+      setFirstTime(false);
+      setNotifySent(false);
       const t0 = Date.now();
       const tick = setInterval(
         () => setElapsed(Math.round((Date.now() - t0) / 1000)),
@@ -164,6 +170,7 @@ export default function Page() {
           `team_id=${encodeURIComponent(teamId)}` +
           `&league_id=${encodeURIComponent(leagueId)}&mode=${mode}` +
           (targetOverride ? `&target=${targetOverride}` : "");
+        lastQuery.current = q;
 
         // league (for my rank) in parallel; non-fatal
         fetch(`${API}/league?league_id=${encodeURIComponent(leagueId)}`)
@@ -173,7 +180,9 @@ export default function Page() {
 
         let r = await fetch(`${API}/brief?${q}`);
         if (r.status === 202) {
-          const { job_id } = await r.json();
+          const body202 = await r.json();
+          const job_id = body202.job_id;
+          if (body202.first_time && run === runId.current) setFirstTime(true);
           for (;;) {
             await new Promise((res) => setTimeout(res, 2500));
             if (run !== runId.current) return;
@@ -255,12 +264,51 @@ export default function Page() {
         <div className="progress">
           <div className="stage">{stageFor(elapsed)}…</div>
           <div className="sub">
-            {elapsed}s elapsed · cold solve takes ~90s, cached results are
-            instant · stage labels are estimates
+            {firstTime
+              ? `first time for this team/league - the full solve takes a few
+                 minutes, after that it's instant`
+              : `${elapsed}s elapsed · usually instant (pre-computed); a fresh
+                 solve takes a few minutes`}
+            {firstTime && ` · ${elapsed}s elapsed`}
           </div>
           <div className="bar">
-            <div style={{ width: `${Math.min(95, (elapsed / 95) * 100)}%` }} />
+            <div
+              style={{ width: `${Math.min(95, (elapsed / 240) * 100)}%` }}
+            />
           </div>
+          {firstTime && !notifySent && (
+            <div className="notifyrow">
+              <input
+                value={notifyChatId}
+                onChange={(e) => setNotifyChatId(e.target.value.trim())}
+                inputMode="numeric"
+                placeholder="Telegram chat ID (optional)"
+                aria-label="Telegram chat ID"
+              />
+              <button
+                type="button"
+                disabled={!notifyChatId}
+                onClick={() => {
+                  void fetch(
+                    `${API}/brief?${lastQuery.current}&notify_chat_id=${encodeURIComponent(notifyChatId)}`,
+                  ).catch(() => {});
+                  setNotifySent(true);
+                }}
+              >
+                ping me when ready
+              </button>
+              <div className="sub">
+                don&apos;t wait around - message the rivalr bot on Telegram
+                once (/start), drop your chat ID here, and close the tab
+              </div>
+            </div>
+          )}
+          {firstTime && notifySent && (
+            <div className="sub">
+              ✓ you&apos;ll get a Telegram message when it&apos;s ready - safe
+              to close this tab
+            </div>
+          )}
         </div>
       )}
 

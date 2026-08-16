@@ -70,6 +70,26 @@ def require_config(path: Path = ENV_FILE) -> tuple[str, str]:
     return token, chat_id
 
 
+def telegram_send_to(chat_id: str, text: str) -> bool:
+    """Message an arbitrary chat via the rivalr bot (the recipient must
+    have /start-ed the bot). Best-effort, never raises."""
+    try:
+        token, _ = require_config()
+    except RuntimeError as exc:
+        log.error("%s", exc)
+        return False
+    try:
+        resp = requests.post(
+            API.format(token=token, method="sendMessage"),
+            json={"chat_id": chat_id, "text": text},
+            timeout=15,
+        )
+        return resp.status_code == 200 and resp.json().get("ok", False)
+    except Exception as exc:
+        log.warning("telegram send failed: %r", exc)
+        return False
+
+
 def telegram_send(text: str) -> bool:
     """Best-effort Telegram message via the rivalr bot. Never raises."""
     try:

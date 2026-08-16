@@ -28,10 +28,13 @@ class StubClient:
         }
 
 
+from rivalr.store import MemoryStore
+
+
 @pytest.fixture(autouse=True)
 def wire_stubs(monkeypatch):
     monkeypatch.setattr(api, "client_factory", lambda: StubClient())
-    monkeypatch.setattr(api, "cache", api.MemoryCache())
+    monkeypatch.setattr(api, "cache", MemoryStore())
     api._jobs.clear()
     api._jobs_by_key.clear()
     api._hits.clear()
@@ -80,6 +83,7 @@ def test_slow_brief_returns_job_and_polls(monkeypatch):
     monkeypatch.setattr(api, "brief_builder", slow)
     r = client.get("/brief?team_id=1&league_id=2")
     assert r.status_code == 202
+    assert r.json()["first_time"] is True  # never cached before
     jid = r.json()["job_id"]
     for _ in range(40):
         s = client.get(f"/brief/status?job_id={jid}").json()
@@ -91,7 +95,11 @@ def test_slow_brief_returns_job_and_polls(monkeypatch):
         raise AssertionError("job never finished")
 
 
-def test_pre_deadline_window_bypasses_cache(monkeypatch):
+def test_pre_deadline_window_requires_fresh_cache(monkeypatch):
+    """Inside the 4h window: pre-warmed entries (<30 min old) serve, but
+    stale ones force a live solve - never an hour-old brief near a
+    deadline."""
+    import time as _time
     from datetime import datetime, timedelta, timezone
 
     soon = (datetime.now(timezone.utc) + timedelta(hours=2))
@@ -105,9 +113,16 @@ def test_pre_deadline_window_bypasses_cache(monkeypatch):
 
     monkeypatch.setattr(api, "brief_builder", builder)
     client.get("/brief?team_id=1&league_id=2")
+    assert calls["n"] == 1
+    # fresh (just written by the job): serves from cache inside window
     r2 = client.get("/brief?team_id=1&league_id=2")
-    assert calls["n"] == 2                # cache bypassed inside window
-    assert "cached" not in r2.json()
+    assert calls["n"] == 1 and r2.json()["cached"] is True
+    # age the entry past the 30-min window bar: must re-solve
+    key = (1, 2, "points", 0, 1)
+    ts, payload = api.cache._cache[key]
+    api.cache._cache[key] = (_time.time() - api.WINDOW_TTL_S - 5, payload)
+    client.get("/brief?team_id=1&league_id=2")
+    assert calls["n"] == 2
 
 
 def test_failed_build_returns_500_not_hang(monkeypatch):

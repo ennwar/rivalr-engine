@@ -64,6 +64,19 @@ main { max-width: 640px; margin: 0 auto; padding: 12px 12px 48px; }
 }
 .bar > div { height: 100%; background: var(--accent); transition: width 1s linear; }
 
+.notifyrow { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+.notifyrow input {
+  flex: 1; min-width: 160px; background: var(--panel2);
+  border: 1px solid var(--border); color: var(--text);
+  padding: 8px 10px; border-radius: 8px;
+}
+.notifyrow button {
+  background: var(--panel2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 8px; padding: 8px 12px; cursor: pointer;
+}
+.notifyrow button:disabled { opacity: 0.5; }
+.notifyrow .sub { flex-basis: 100%; }
+
 /* sections */
 section { margin-top: 18px; }
 section > h2 {

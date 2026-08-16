@@ -1,0 +1,200 @@
+"""Shared Postgres store: brief cache + requested-pair tracking.
+
+Used by the API (serve + record) and the worker (pre-warm). Without
+DATABASE_URL everything degrades to in-memory (dev/tests).
+
+Key = (team_id, league_id, mode, target-or-0, gw).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+
+log = logging.getLogger("rivalr.store")
+
+SERVE_TTL_S = 3600          # normal serving freshness
+WINDOW_TTL_S = 1800         # freshness required inside the pre-deadline
+                            # window (pre-warmed entries qualify; stale
+                            # ones force a live solve)
+STALE_REFRESH_S = 6 * 3600  # pre-warm refreshes entries older than this
+
+
+class MemoryStore:
+    def __init__(self) -> None:
+        self._cache: dict[tuple, tuple[float, dict]] = {}
+        self._pairs: dict[tuple, dict] = {}
+
+    def get(self, key: tuple, max_age_s: int = SERVE_TTL_S) -> dict | None:
+        hit = self._cache.get(key)
+        if hit and time.time() - hit[0] < max_age_s:
+            return hit[1]
+        return None
+
+    def put(self, key: tuple, payload: dict) -> None:
+        self._cache[key] = (time.time(), payload)
+
+    def ever_cached(self, team_id: int, league_id: int) -> bool:
+        return any(k[0] == team_id and k[1] == league_id for k in self._cache)
+
+    def record_pair(self, team_id: int, league_id: int, mode: str,
+                    target: int | None) -> None:
+        k = (team_id, league_id, mode, target or 0)
+        p = self._pairs.setdefault(k, {"hits": 0})
+        p["hits"] += 1
+        p["last_seen"] = time.time()
+
+    def pairs(self) -> list[dict]:
+        return [
+            {"team_id": k[0], "league_id": k[1], "mode": k[2],
+             "target": k[3] or None, "hits": v["hits"]}
+            for k, v in self._pairs.items()
+        ]
+
+    def stale_keys(self, gw: int, older_than_s: int = STALE_REFRESH_S) -> list[tuple]:
+        keys = [
+            (p["team_id"], p["league_id"], p["mode"], p["target"] or 0, gw)
+            for p in self.pairs()
+        ]
+        if older_than_s <= 0:  # force refresh: everything is stale
+            return keys
+        cutoff = time.time() - older_than_s
+        return [
+            k for k in keys
+            if (hit := self._cache.get(k)) is None or hit[0] < cutoff
+        ]
+
+
+class PgStore:
+    DDL = [
+        """CREATE TABLE IF NOT EXISTS brief_cache (
+            team_id BIGINT NOT NULL,
+            league_id BIGINT NOT NULL,
+            mode TEXT NOT NULL,
+            target BIGINT NOT NULL,
+            gw INT NOT NULL,
+            payload JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (team_id, league_id, mode, target, gw)
+        )""",
+        """CREATE TABLE IF NOT EXISTS requested_pairs (
+            team_id BIGINT NOT NULL,
+            league_id BIGINT NOT NULL,
+            mode TEXT NOT NULL,
+            target BIGINT NOT NULL,
+            hits INT NOT NULL DEFAULT 1,
+            first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+            last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (team_id, league_id, mode, target)
+        )""",
+    ]
+
+    def __init__(self, dsn: str) -> None:
+        import psycopg
+
+        self._psycopg = psycopg
+        self._dsn = dsn
+        with psycopg.connect(dsn) as conn:
+            for ddl in self.DDL:
+                conn.execute(ddl)
+            conn.commit()
+
+    def _conn(self):
+        return self._psycopg.connect(self._dsn)
+
+    def get(self, key: tuple, max_age_s: int = SERVE_TTL_S) -> dict | None:
+        team, league, mode, target, gw = key
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT payload FROM brief_cache WHERE team_id=%s AND "
+                "league_id=%s AND mode=%s AND target=%s AND gw=%s AND "
+                "created_at > now() - %s * interval '1 second'",
+                (team, league, mode, target or 0, gw, max_age_s),
+            ).fetchone()
+        return row[0] if row else None
+
+    def put(self, key: tuple, payload: dict) -> None:
+        team, league, mode, target, gw = key
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO brief_cache "
+                "(team_id, league_id, mode, target, gw, payload, created_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,now()) "
+                "ON CONFLICT (team_id, league_id, mode, target, gw) "
+                "DO UPDATE SET payload=EXCLUDED.payload, created_at=now()",
+                (team, league, mode, target or 0, gw, json.dumps(payload)),
+            )
+            conn.commit()
+
+    def ever_cached(self, team_id: int, league_id: int) -> bool:
+        """Any cache row ever, any gw/mode - the 'is this pair new' test."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM brief_cache WHERE team_id=%s AND league_id=%s "
+                "LIMIT 1", (team_id, league_id),
+            ).fetchone()
+        return row is not None
+
+    def record_pair(self, team_id: int, league_id: int, mode: str,
+                    target: int | None) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO requested_pairs (team_id, league_id, mode, target) "
+                "VALUES (%s,%s,%s,%s) "
+                "ON CONFLICT (team_id, league_id, mode, target) DO UPDATE "
+                "SET hits = requested_pairs.hits + 1, last_seen = now()",
+                (team_id, league_id, mode, target or 0),
+            )
+            conn.commit()
+
+    def pairs(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT team_id, league_id, mode, target, hits "
+                "FROM requested_pairs ORDER BY hits DESC",
+            ).fetchall()
+        return [
+            {"team_id": r[0], "league_id": r[1], "mode": r[2],
+             "target": r[3] or None, "hits": r[4]}
+            for r in rows
+        ]
+
+    def stale_keys(self, gw: int, older_than_s: int = STALE_REFRESH_S) -> list[tuple]:
+        """Requested pairs whose cache entry for this gw is missing or
+        older than the threshold - the pre-warm work list. A threshold
+        of <= 0 means force-refresh everything."""
+        if older_than_s <= 0:
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT team_id, league_id, mode, target "
+                    "FROM requested_pairs ORDER BY hits DESC",
+                ).fetchall()
+            return [(r[0], r[1], r[2], r[3], gw) for r in rows]
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT p.team_id, p.league_id, p.mode, p.target "
+                "FROM requested_pairs p LEFT JOIN brief_cache c "
+                "ON c.team_id=p.team_id AND c.league_id=p.league_id "
+                "AND c.mode=p.mode AND c.target=p.target AND c.gw=%s "
+                "WHERE c.created_at IS NULL "
+                "OR c.created_at < now() - %s * interval '1 second' "
+                "ORDER BY p.hits DESC",
+                (gw, older_than_s),
+            ).fetchall()
+        return [(r[0], r[1], r[2], r[3], gw) for r in rows]
+
+
+def make_store():
+    dsn = os.environ.get("DATABASE_URL")
+    if dsn:
+        try:
+            s = PgStore(dsn)
+            log.info("store: postgres")
+            return s
+        except Exception:
+            log.exception("postgres store unavailable, using in-memory")
+    else:
+        log.warning("DATABASE_URL not set - in-memory store")
+    return MemoryStore()
