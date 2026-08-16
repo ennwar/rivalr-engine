@@ -225,6 +225,24 @@ def score_gw(
     table_legacy = {name: _bucket_stats(errs) for name, errs in legacy_errs.items()}
     table_legacy["All"] = table["All"]
 
+    # Base-layer scoring (paper buckets) when the snapshot carried layers:
+    # lets us show whether the DefCon correction earns its place.
+    table_base = None
+    base_layer = ledger.get("layers", {}).get("base") or {}
+    if base_layer:
+        base_errs: dict[str, list[float]] = {n: [] for n in BUCKET_NAMES}
+        base_all: list[float] = []
+        for pid_str, xs in base_layer.items():
+            pid = int(pid_str)
+            if xs and pid in stats:
+                err = float(xs[0]) - stats[pid]["points"]
+                base_all.append(err)
+                base_errs[
+                    paper_bucket(stats[pid]["minutes"], stats[pid]["points"])
+                ].append(err)
+        table_base = {n: _bucket_stats(e) for n, e in base_errs.items()}
+        table_base["All"] = _bucket_stats(base_all)
+
     counterfactual = _transfer_counterfactual(client, gw, ledger, actuals)
 
     # Players who scored (non-zero) but have NO ledger entry at all: they
@@ -259,6 +277,7 @@ def score_gw(
         },
         "accuracy": table,          # paper buckets (arXiv 2508.09992 Table 4)
         "accuracy_legacy": table_legacy,  # point-range buckets 0/1-3/4-9/10+
+        "accuracy_base": table_base,      # base layer (no DefCon), if logged
         "counterfactual": counterfactual,
     }
     out = ledger_dir / f"gw{gw}_score.json"

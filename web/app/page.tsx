@@ -533,13 +533,7 @@ export default function Page() {
           <footer>
             projections: OpenFPL + DefCon layer · every recommendation is
             logged before the deadline and scored after -{" "}
-            <a
-              href="https://github.com/ennwar/rivalr-engine/tree/main/logs/predictions"
-              target="_blank"
-              rel="noreferrer"
-            >
-              accuracy ledger
-            </a>
+            <a href="/accuracy">see our accuracy, including the failures</a>
           </footer>
         </>
       )}

@@ -31,6 +31,32 @@ PREWARM_WINDOW_H = 6
 MAX_SOLVES_PER_TICK = 8
 
 
+def score_settled_gws() -> None:
+    """Once a GW's data is checked, score its ledger snapshot (paper
+    buckets + base-vs-final) so /accuracy has live numbers without any
+    manual step. Skips GWs with no snapshot or an existing score file."""
+    from . import ledger
+    from .fetch import FPLClient
+
+    client = FPLClient()
+    settled = [
+        ev["id"] for ev in client.bootstrap()["events"]
+        if ev.get("finished") and ev.get("data_checked")
+    ]
+    for gw in settled:
+        score_file = ledger.LEDGER_DIR / f"gw{gw}_score.json"
+        if score_file.exists():
+            continue
+        try:
+            ledger._latest_ledger_for(gw, ledger.LEDGER_DIR)
+        except FileNotFoundError:
+            continue  # no snapshot to score (e.g. pre-launch gameweeks)
+        log.info("auto-scoring settled gw%d", gw)
+        result = ledger.score_gw(client, gw)
+        log.info("gw%d scored: All rmse=%s", gw,
+                 result["accuracy"]["All"]["rmse"])
+
+
 def prewarm_tick() -> None:
     from . import briefdata, ledger, snapshot
     from .fetch import FPLClient
@@ -129,6 +155,11 @@ def main() -> None:
             log.info("snapshot --auto exited %s", exc.code)
         except Exception:
             log.exception("worker iteration failed (continuing)")
+
+        try:
+            score_settled_gws()
+        except Exception:
+            log.exception("auto-score tick failed (continuing)")
 
         try:
             prewarm_tick()

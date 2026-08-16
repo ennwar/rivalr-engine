@@ -333,6 +333,55 @@ def fixtures(horizon: int = Query(8, ge=1, le=12)):
     return fx.fixture_grid(client_factory(), horizon=horizon)
 
 
+# Backtest results are verified facts from docs/backtest_findings.md -
+# reproduce with `uv run python tests/backtest_openfpl.py`.
+BACKTEST = {
+    "reference": "OpenFPL, arXiv 2508.09992, Table 4 (2024-25 GW32-38)",
+    "note": (
+        "Blanks is compared against the honest outfield-only benchmark of "
+        "1.136, not the paper's published 1.291 - the published aggregate "
+        "is inflated by ~15 assistant-manager rows at RMSE 6.192 which our "
+        "evaluation excludes. Zeros carries a known availability handicap "
+        "(see limitations)."
+    ),
+    "buckets": [
+        {"bucket": "Zeros", "n": 3209, "ours": 0.958, "paper": 0.818,
+         "benchmark": 0.818, "validated": False},
+        {"bucket": "Blanks", "n": 1464, "ours": 1.610, "paper": 1.291,
+         "benchmark": 1.136, "validated": False},
+        {"bucket": "Tickers", "n": 185, "ours": 1.393, "paper": 1.517,
+         "benchmark": 1.517, "validated": True},
+        {"bucket": "Haulers", "n": 455, "ours": 5.208, "paper": 5.142,
+         "benchmark": 5.142, "validated": True},
+    ],
+}
+
+
+@app.get("/accuracy")
+def accuracy():
+    """Public accuracy data: the backtest vs the paper, plus every scored
+    live gameweek (paper buckets, base vs DefCon-corrected)."""
+    live = []
+    try:
+        for p in sorted(ledger.LEDGER_DIR.glob("gw*_score.json")):
+            try:
+                s = json.loads(p.read_text(encoding="utf-8"))
+                live.append({
+                    "gw": s["gw"],
+                    "partial_snapshot": s.get("ledger_partial", False),
+                    "accuracy": s["accuracy"],
+                    "accuracy_base": s.get("accuracy_base"),
+                    "counterfactual": s.get("counterfactual"),
+                    "unrostered": s.get("unrostered_at_snapshot", {}).get("n", 0),
+                })
+            except Exception:
+                log.warning("unreadable score file %s", p.name)
+    except FileNotFoundError:
+        pass
+    live.sort(key=lambda r: r["gw"])
+    return {"backtest": BACKTEST, "live": live}
+
+
 @app.get("/league")
 def league(league_id: int = Query(...)):
     client = client_factory()
