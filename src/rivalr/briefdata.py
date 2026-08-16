@@ -208,10 +208,59 @@ def build_brief_json(
             client, team_id, league_id, projections=next_gw_proj
         )
         labels = {int(k): v for k, v in rep["classification"].items()}
+        n_horizon = min(5, horizon)
         rivals_block = []
         for r in rep["rivals"]:
             their = sorted(rivals.rival_squad(r))
+
+            # -- chip war: BB/TC threat over the next 5 GWs from their
+            # ACTUAL squad. Projections already sum double-gameweek
+            # fixtures, so the argmax lands on their best (often double)
+            # window naturally.
+            bench_ids = r.get("bench_players", [])
+            bb = tc = None
+            if their:
+                bb_by_gw = [
+                    sum((final.get(p) or [0.0] * n_horizon)[i]
+                        for p in bench_ids)
+                    for i in range(n_horizon)
+                ] if bench_ids else []
+                if bb_by_gw and max(bb_by_gw) > 0:
+                    i = bb_by_gw.index(max(bb_by_gw))
+                    bb = {"best_gw": gw + i, "swing": round(bb_by_gw[i], 1)}
+                tc_by_gw = []
+                for i in range(n_horizon):
+                    best_pid, best_val = None, 0.0
+                    for p in their:
+                        v = (final.get(p) or [0.0] * n_horizon)[i]
+                        if v > best_val:
+                            best_pid, best_val = p, v
+                    tc_by_gw.append((best_val, best_pid))
+                if tc_by_gw and max(v for v, _ in tc_by_gw) > 0:
+                    i = max(range(n_horizon), key=lambda j: tc_by_gw[j][0])
+                    val, pid = tc_by_gw[i]
+                    tc = {
+                        "best_gw": gw + i,
+                        "swing": round(val, 1),
+                        "player": elements.get(pid, {}).get("web_name", "?"),
+                    }
+            first_half_used = {
+                c["name"] for c in r.get("chips_used", [])
+                if c.get("event") and c["event"] <= rivals.FIRST_SET_EXPIRY_GW
+            }
+            chip_war = {
+                "chips_used": r.get("chips_used", []),
+                "first_set_left": [
+                    c for c in rivals.CHIP_SET if c not in first_half_used
+                ] if gw <= rivals.FIRST_SET_EXPIRY_GW else [],
+                "expiry_gw": rivals.FIRST_SET_EXPIRY_GW,
+                "gws_to_expiry": max(0, rivals.FIRST_SET_EXPIRY_GW - gw + 1),
+                "bench_boost": bb,
+                "triple_captain": tc,
+            }
+
             rivals_block.append({
+                "chip_war": chip_war,
                 "entry_id": r["entry_id"],
                 "name": r["name"],
                 "team_name": r["team_name"],

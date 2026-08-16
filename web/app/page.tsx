@@ -23,6 +23,15 @@ type Player = {
   chance_of_playing: number | null;
 };
 
+type ChipWar = {
+  chips_used: { name: string; event: number }[];
+  first_set_left: string[];
+  expiry_gw: number;
+  gws_to_expiry: number;
+  bench_boost: { best_gw: number; swing: number } | null;
+  triple_captain: { best_gw: number; swing: number; player: string } | null;
+};
+
 type Rival = {
   entry_id: number;
   name: string;
@@ -30,10 +39,18 @@ type Rival = {
   rank: number | null;
   points: number;
   chips_left: Record<string, number>;
+  chip_war?: ChipWar;
   overlap_pct: number | null;
   differentials: Player[];
   shields: Player[];
   swords: Player[];
+};
+
+const CHIP_LABEL: Record<string, string> = {
+  wildcard: "WC",
+  freehit: "FH",
+  bboost: "BB",
+  "3xc": "TC",
 };
 
 type Transfer = {
@@ -330,6 +347,61 @@ export default function Page() {
               {w}
             </div>
           ))}
+
+          {brief.rivals && brief.rivals.length > 0 && brief.rivals[0].chip_war && (
+            <section>
+              <h2>Chip war</h2>
+              {brief.rivals[0].chip_war.gws_to_expiry > 0 && (
+                <div className="warn">
+                  first chip set expires GW
+                  {brief.rivals[0].chip_war.expiry_gw} —{" "}
+                  {brief.rivals[0].chip_war.gws_to_expiry} gameweek
+                  {brief.rivals[0].chip_war.gws_to_expiry !== 1 && "s"} left to
+                  use or lose
+                </div>
+              )}
+              {brief.rivals.map((r) => {
+                const cw = r.chip_war!;
+                return (
+                  <div className="transfer" key={r.entry_id}>
+                    <div className="line">
+                      <span style={{ fontWeight: 600 }}>{r.name}</span>
+                      <span style={{ marginLeft: "auto" }}>
+                        {cw.first_set_left.map((c) => (
+                          <span key={c} className="chip newclub" title={`${c} still unused from the first set (expires GW${cw.expiry_gw})`}>
+                            {CHIP_LABEL[c] ?? c}
+                          </span>
+                        ))}
+                        {cw.chips_used.map((c) => (
+                          <span
+                            key={`${c.name}${c.event}`}
+                            className="chip"
+                            style={{ textDecoration: "line-through", background: "#20242e", color: "var(--faint)" }}
+                            title={`played ${c.name} in GW${c.event}`}
+                          >
+                            {CHIP_LABEL[c.name] ?? c.name}
+                          </span>
+                        ))}
+                      </span>
+                    </div>
+                    <div className="swings">
+                      {cw.bench_boost
+                        ? `BB threat: +${cw.bench_boost.swing} best in GW${cw.bench_boost.best_gw}`
+                        : "BB threat: unknown (squad hidden)"}
+                      {" · "}
+                      {cw.triple_captain
+                        ? `TC threat: +${cw.triple_captain.swing} on ${cw.triple_captain.player} in GW${cw.triple_captain.best_gw}`
+                        : "TC threat: unknown"}
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="legend">
+                estimated from each rival&apos;s actual squad and our per-GW
+                projections; doubles are already in the numbers
+              </div>
+            </section>
+          )}
 
           <section>
             <h2>Rivals{target ? " · chasing" : ""}</h2>

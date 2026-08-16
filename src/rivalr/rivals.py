@@ -33,14 +33,17 @@ from .fetch import FPLClient
 
 log = logging.getLogger("rivalr.rivals")
 
-# Chip inventory per manager for the season. Adjust if FPL changes the rules
-# (e.g. the 2024/25 second-half chip set). Names match the API's chip names.
+# Chip inventory per manager for the season: 2026-27 uses two full sets
+# (as 2024-25 did) - one per half-season, and the FIRST SET EXPIRES AT
+# GW19 unused. Names match the API's chip names.
 CHIP_INVENTORY: dict[str, int] = {
-    "wildcard": 2,   # one per half-season
-    "freehit": 1,
-    "bboost": 1,
-    "3xc": 1,
+    "wildcard": 2,
+    "freehit": 2,
+    "bboost": 2,
+    "3xc": 2,
 }
+CHIP_SET = ["wildcard", "freehit", "bboost", "3xc"]
+FIRST_SET_EXPIRY_GW = 19
 
 SHIELD_EO_THRESHOLD = 0.5   # >= 50% mini-league EO
 SWORD_EO_THRESHOLD = 0.15   # <= 15% mini-league EO
@@ -274,6 +277,8 @@ def build_rivals_report(
                 "active_chip": m.active_chip,
                 "chips_used": m.chips_used,
                 "chips_left": m.chips_left,
+                "bench_players": m.bench,
+                "starters": m.starters,
                 "bank": m.bank,
                 "team_value": m.team_value,
                 "transfers_this_season": len(m.transfers),

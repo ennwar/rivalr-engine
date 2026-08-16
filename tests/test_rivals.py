@@ -91,10 +91,11 @@ def test_compare_squads():
 
 
 def test_chips_left():
+    # 2026-27: two full chip sets per season (first expires GW19)
     m = make_manager(1, list(range(1, 16)), captain=1)
     m.chips_used = [{"name": "wildcard", "event": 4}, {"name": "bboost", "event": 6}]
     left = m.chips_left
-    assert left["wildcard"] == 1  # two wildcards per season
-    assert left["bboost"] == 0
-    assert left["freehit"] == 1
-    assert left["3xc"] == 1
+    assert left["wildcard"] == 1
+    assert left["bboost"] == 1
+    assert left["freehit"] == 2
+    assert left["3xc"] == 2
