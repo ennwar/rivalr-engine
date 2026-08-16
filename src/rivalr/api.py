@@ -262,6 +262,13 @@ def brief_status(job_id: str = Query(...)):
         return {"status": job["status"]}
 
 
+@app.get("/fixtures")
+def fixtures(horizon: int = Query(8, ge=1, le=12)):
+    from . import fixtures as fx
+
+    return fx.fixture_grid(client_factory(), horizon=horizon)
+
+
 @app.get("/league")
 def league(league_id: int = Query(...)):
     client = client_factory()

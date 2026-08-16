@@ -19,7 +19,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <nav className="topnav">
+          <a href="/">brief</a>
+          <a href="/fixtures">fixtures</a>
+          <a href="/planner">planner</a>
+          <a href="/accuracy">accuracy</a>
+        </nav>
+        {children}
+      </body>
     </html>
   );
 }

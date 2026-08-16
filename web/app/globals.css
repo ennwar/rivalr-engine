@@ -25,6 +25,50 @@ body {
 }
 
 main { max-width: 640px; margin: 0 auto; padding: 12px 12px 48px; }
+main.wide { max-width: 960px; }
+
+.topnav {
+  display: flex; gap: 4px; padding: 8px 12px; max-width: 640px;
+  margin: 0 auto; border-bottom: 1px solid var(--panel2);
+}
+.topnav a {
+  color: var(--dim); text-decoration: none; font-size: 13px;
+  padding: 4px 10px; border-radius: 999px;
+}
+.topnav a:hover { background: var(--panel); color: var(--text); }
+
+/* fixture ticker */
+.fxwrap { overflow-x: auto; }
+.fxtable { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+.fxtable th, .fxtable td { padding: 3px 4px; text-align: center; }
+.fxtable th { color: var(--faint); font-weight: 600; }
+.fxtable td.club {
+  text-align: left; font-weight: 600; position: sticky; left: 0;
+  background: var(--bg); z-index: 1; padding-right: 8px; cursor: default;
+}
+.fxcell {
+  border-radius: 4px; padding: 2px 3px; margin: 1px 0; line-height: 1.25;
+  color: #0b0e13; font-weight: 700;
+}
+.fx1 { background: #2e9e64; }
+.fx2 { background: #7bbf5a; }
+.fx3 { background: #b7b25a; }
+.fx4 { background: #d4854e; }
+.fx5 { background: #d05454; }
+.fxblank { color: var(--faint); }
+.fxdbl {
+  font-size: 9px; color: var(--cyan); font-weight: 700; display: block;
+}
+.fxavg { color: var(--dim); font-weight: 600; }
+.fxcontrols {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin: 10px 0;
+}
+.fxcontrols select, .fxcontrols button {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; font-size: 13px;
+}
+.fxcontrols .active { border-color: var(--accent); color: var(--accent); }
 
 .mono { font-variant-numeric: tabular-nums; }
 
