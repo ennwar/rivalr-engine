@@ -47,6 +47,107 @@ def _player(
     }
 
 
+def build_plan_json(
+    client: FPLClient,
+    team_id: int,
+    league_id: int,
+    horizon: int = 5,
+    locked: list[int] | None = None,
+    banned: list[int] | None = None,
+) -> dict:
+    """Week-by-week transfer plan (points mode) with lock-in/lock-out
+    constraints passed straight to the MILP."""
+    bootstrap = client.bootstrap()
+    elements = {el["id"]: el for el in bootstrap["elements"]}
+    teams = {t["id"]: t["name"] for t in bootstrap["teams"]}
+    gw = client.next_gw()
+
+    raw = model.project_all(client, horizon=horizon)
+    est = {pid: minutes.estimate_minutes(client, pid) for pid in raw}
+    base = minutes.apply_minutes(raw, est)
+    try:
+        dc_corr = defcon.DefConModel(client).corrections(
+            list(base), est, horizon=horizon
+        )
+    except Exception:
+        log.exception("defcon layer failed in planner")
+        dc_corr = {}
+    final = {
+        pid: [
+            round(x + (dc_corr.get(pid) or [0.0] * len(xs))[i], 3)
+            for i, x in enumerate(xs)
+        ]
+        for pid, xs in base.items()
+    }
+
+    stub_rep = {"effective_ownership": {}, "classification": {},
+                "rivals": [], "small_league": True, "league_size": 0}
+    plans = optimise.solve_all_modes(
+        client=client,
+        team_id=team_id,
+        projections=final,
+        rivals_report=stub_rep,
+        target_id=None,
+        horizon=horizon,
+        xmins={pid: e.expected_minutes for pid, e in est.items()},
+        solver_options={
+            "locked": locked or [],
+            "banned": banned or [],
+        },
+    )
+    plan = plans.get("points")
+    if plan is None:
+        raise RuntimeError(
+            "solver found no feasible plan - locks may be contradictory "
+            "(e.g. too many locked players for the budget or formation)"
+        )
+
+    def mini(pid: int | None) -> dict | None:
+        if pid is None:
+            return None
+        el = elements.get(pid, {})
+        return {
+            "id": pid,
+            "name": el.get("web_name", f"#{pid}"),
+            "club": teams.get(el.get("team"), "?"),
+            "position": POS.get(el.get("element_type"), "?"),
+            "price": el.get("now_cost", 0) / 10.0,
+            "projection": round((final.get(pid) or [0.0])[0], 2),
+        }
+
+    weeks = []
+    for w in plan.get("weeks", []):
+        pairs = list(zip(w["transfers_out"], w["transfers_in"]))
+        pairs += [(None, p) for p in w["transfers_in"][len(w["transfers_out"]):]]
+        weeks.append({
+            "gw": w["gw"],
+            "transfers": [
+                {"out": mini(o), "in": mini(i)} for o, i in pairs
+            ],
+            "banked": w["banked"],
+            "free_transfers": w["free_transfers"],
+            "hits": w["hits"],
+            "itb": w["itb"],
+            "chip": w["chip"],
+            "captain": mini(w["captain"]),
+            "squad": [mini(p) for p in sorted(
+                w["squad"], key=lambda p: elements.get(p, {}).get("element_type", 9)
+            )],
+            "xp": w["xp"],
+            "cum_xp": w["cum_xp"],
+        })
+
+    return {
+        "gameweek": gw,
+        "horizon": horizon,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "locked": locked or [],
+        "banned": banned or [],
+        "total_xp": plan.get("expected_points"),
+        "weeks": weeks,
+    }
+
+
 def build_brief_json(
     client: FPLClient,
     team_id: int,

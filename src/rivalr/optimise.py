@@ -220,6 +220,44 @@ def _extract_plan(solution, next_gw: int, horizon: int,
     stats = solution.get("statistics", {})
     hits = sum(s.get("pt", 0) for s in stats.values())
 
+    # Week-by-week plan over the whole horizon (planner view).
+    weeks = []
+    cum_xp = 0.0
+    for gw_i in range(next_gw, next_gw + horizon):
+        wk = picks[picks["week"] == gw_i]
+        if wk.empty and gw_i != next_gw:
+            continue
+        stats_w = stats.get(gw_i, stats.get(str(gw_i), {}))
+        w_in = wk[wk["transfer_in"] > 0.5]["id"].astype(int).tolist()
+        w_out = wk[wk["transfer_out"] > 0.5]["id"].astype(int).tolist()
+        w_squad = wk[wk["squad"] > 0.5]["id"].astype(int).tolist()
+        w_xi = wk[wk["lineup"] > 0.5]["id"].astype(int).tolist()
+        w_cap = wk[wk["captain"] > 0.5]["id"].astype(int).tolist()
+        w_xp = 0.0
+        for _, r in wk.iterrows():
+            idx = int(r["week"]) - next_gw
+            if r["multiplier"] > 0 and 0 <= idx < horizon:
+                xs = projections.get(int(r["id"]), [])
+                if idx < len(xs):
+                    w_xp += xs[idx] * r["multiplier"]
+        w_hits = int(stats_w.get("pt", 0))
+        cum_xp += w_xp - 4 * w_hits
+        weeks.append({
+            "gw": gw_i,
+            "transfers_in": w_in,
+            "transfers_out": w_out,
+            "banked": len(w_in) == 0,
+            "free_transfers": stats_w.get("ft"),
+            "hits": w_hits,
+            "itb": stats_w.get("itb"),
+            "chip": stats_w.get("chip") or None,
+            "squad": w_squad,
+            "xi": w_xi,
+            "captain": w_cap[0] if w_cap else None,
+            "xp": round(w_xp, 2),
+            "cum_xp": round(cum_xp, 2),
+        })
+
     return {
         "transfers_in": transfers_in,
         "transfers_out": transfers_out,
@@ -228,6 +266,7 @@ def _extract_plan(solution, next_gw: int, horizon: int,
         "captain": captain,
         "expected_points": round(raw_xp - 4 * hits, 2),
         "hits": int(hits),
+        "weeks": weeks,
         "solver_objective": round(solution.get("score", 0.0), 3),
         "summary": solution.get("summary", ""),
     }
@@ -242,6 +281,7 @@ def solve_all_modes(
     horizon: int = 5,
     xmins: dict[int, float] | None = None,
     requested_mode: str = "points",
+    solver_options: dict | None = None,
 ) -> dict[str, dict | None]:
     """Solve points / chase / defend side by side.
 
@@ -312,6 +352,7 @@ def solve_all_modes(
             "datasource": datasource,
             "team_id": team_id,
             "horizon": horizon,
+            **(solver_options or {}),
         }
         try:
             try:

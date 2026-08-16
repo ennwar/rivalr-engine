@@ -110,11 +110,11 @@ def _gc_jobs() -> None:
                 _jobs_by_key.pop(key, None)
 
 
-def _run_job(jid: str, key: tuple, kwargs: dict) -> None:
+def _run_job(jid: str, key: tuple, kwargs: dict, builder=None) -> None:
     with _jobs_lock:
         _jobs[jid]["status"] = "running"
     try:
-        payload = brief_builder(client_factory(), **kwargs)
+        payload = (builder or brief_builder)(client_factory(), **kwargs)
         cache.put(key, payload)
         with _jobs_lock:
             _jobs[jid].update(status="done", result=payload)
@@ -260,6 +260,70 @@ def brief_status(job_id: str = Query(...)):
         if job["status"] == "failed":
             return {"status": "failed", "error": job.get("error")}
         return {"status": job["status"]}
+
+
+@app.get("/plan")
+def plan(
+    team_id: int = Query(...),
+    league_id: int = Query(...),
+    horizon: int = Query(5, ge=1, le=8),
+    locked: str = Query("", max_length=200),
+    banned: str = Query("", max_length=200),
+):
+    """Week-by-week transfer plan. Same job/poll pattern as /brief."""
+    _gc_jobs()
+    client = client_factory()
+    gw, deadline = _gw_and_deadline(client)
+
+    def ids(csv: str) -> list[int]:
+        try:
+            return [int(x) for x in csv.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(422, "locked/banned must be comma-separated ids")
+
+    locked_ids, banned_ids = ids(locked), ids(banned)
+    mode_key = (
+        f"plan:h{horizon}"
+        + (f":l{','.join(map(str, sorted(locked_ids)))}" if locked_ids else "")
+        + (f":b{','.join(map(str, sorted(banned_ids)))}" if banned_ids else "")
+    )
+    key = (team_id, league_id, mode_key, 0, gw)
+
+    # Only the unconstrained base plan joins the pre-warm list; ad-hoc
+    # lock combinations are solved on demand.
+    if not locked_ids and not banned_ids:
+        try:
+            cache.record_pair(team_id, league_id, mode_key, None)
+        except Exception:
+            pass
+
+    max_age = WINDOW_TTL_S if _in_pre_deadline_window(deadline) else SERVE_TTL_S
+    cached = cache.get(key, max_age_s=max_age)
+    if cached is not None:
+        return {"cached": True, **cached}
+
+    kwargs = dict(team_id=team_id, league_id=league_id, horizon=horizon,
+                  locked=locked_ids, banned=banned_ids)
+    with _jobs_lock:
+        jid = _jobs_by_key.get(key)
+        job = _jobs.get(jid) if jid else None
+        if job is None or job["status"] not in ("queued", "running"):
+            jid = uuid.uuid4().hex
+            _jobs[jid] = {"status": "queued", "created": time.time(), "key": key}
+            _jobs_by_key[key] = jid
+            _executor.submit(_run_job, jid, key, kwargs,
+                             briefdata.build_plan_json)
+
+    deadline_t = time.time() + SYNC_WAIT_S
+    while time.time() < deadline_t:
+        with _jobs_lock:
+            status = _jobs[jid]["status"]
+            if status == "done":
+                return _jobs[jid]["result"]
+            if status == "failed":
+                raise HTTPException(500, _jobs[jid].get("error", "solve failed"))
+        time.sleep(0.25)
+    return JSONResponse({"job_id": jid, "status": "pending"}, status_code=202)
 
 
 @app.get("/fixtures")
