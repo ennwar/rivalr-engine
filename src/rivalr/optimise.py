@@ -282,6 +282,7 @@ def solve_all_modes(
     xmins: dict[int, float] | None = None,
     requested_mode: str = "points",
     solver_options: dict | None = None,
+    my_data_override: dict | None = None,
 ) -> dict[str, dict | None]:
     """Solve points / chase / defend side by side.
 
@@ -298,7 +299,9 @@ def solve_all_modes(
 
     bootstrap = client.bootstrap()
     elements = {el["id"]: el for el in bootstrap["elements"]}
-    next_gw = client.next_gw()
+    # override_next_gw (vendor option) lets a backfill solve target a
+    # past deadline; the projection CSV columns must start at that gw.
+    next_gw = (solver_options or {}).get("override_next_gw") or client.next_gw()
 
     if xmins is None:
         # crude default: 90 * chance-of-playing-ish; callers should pass
@@ -356,19 +359,25 @@ def solve_all_modes(
         }
         try:
             try:
-                my_data = generate_team_json(team_id, options)
-                # The vendor's FT arithmetic has proven unreliable; use
-                # our reconstruction from the entry's actual history.
-                try:
-                    from .rivals import free_transfers
+                if my_data_override is not None:
+                    # Autonomous-team solves supply their own squad state;
+                    # never touch the human's entry.
+                    my_data = json.loads(json.dumps(my_data_override))
+                else:
+                    my_data = generate_team_json(team_id, options)
+                    # The vendor's FT arithmetic has proven unreliable; use
+                    # our reconstruction from the entry's actual history.
+                    try:
+                        from .rivals import free_transfers
 
-                    ft = free_transfers(client, team_id, next_gw)
-                    my_data["transfers"]["limit"] = ft
-                    my_data["transfers"]["made"] = 0
-                    log.info("free transfers going into gw%d: %d", next_gw, ft)
-                except Exception:
-                    log.warning("FT reconstruction failed; using vendor value",
-                                exc_info=True)
+                        ft = free_transfers(client, team_id, next_gw)
+                        my_data["transfers"]["limit"] = ft
+                        my_data["transfers"]["made"] = 0
+                        log.info("free transfers going into gw%d: %d",
+                                 next_gw, ft)
+                    except Exception:
+                        log.warning("FT reconstruction failed; using vendor "
+                                    "value", exc_info=True)
             except Exception:
                 # Pre-season / before GW1 picks exist: build from scratch
                 # with a full budget, exactly like the vendor's preseason

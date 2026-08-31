@@ -14,6 +14,7 @@ type Mini = {
   price: number;
   projection: number;
   still_to_play?: boolean | null;
+  pending_fixture_xpts?: number | null;
 };
 
 type LiveState = { gw: number; in_progress: boolean };
@@ -273,8 +274,10 @@ export default function Planner() {
                           <span className="club">{t.out.club}</span>
                           {t.out.still_to_play && plan.live && (
                             <span className="chip lowconf"
-                                  title={`still has a GW${plan.live.gw} fixture - his points there are yours no matter what; this sale only applies from GW${plan.gameweek}`}>
+                                  title={`his remaining GW${plan.live.gw} fixture is projected at ${t.out.pending_fixture_xpts != null ? `~${t.out.pending_fixture_xpts.toFixed(1)} xPts` : "unknown"} (pre-deadline projection) - those points are yours no matter what, because this sale only takes effect at the GW${plan.gameweek} deadline. The plan values his GW${plan.gameweek}+ fixtures only.`}>
                               plays GW{plan.live.gw}
+                              {t.out.pending_fixture_xpts != null &&
+                                ` · ~${t.out.pending_fixture_xpts.toFixed(1)} xPts yours regardless`}
                             </span>
                           )}
                         </span>

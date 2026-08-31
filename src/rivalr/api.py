@@ -486,11 +486,31 @@ def season_squads(
         else:
             people.append(entry)
 
-    # Model squad: the AUTONOMOUS model team's real squad for settled
-    # gameweeks (worker-computed); falls back to the old
-    # "mine + recommended transfers" overlay when no row exists yet.
+    # Model squad: the AUTONOMOUS model team only - its settled row, or
+    # its pre-deadline DECISION for unsettled gameweeks. The old
+    # "mine + recommended transfers" overlay is gone: it rendered the
+    # human's squad under the model's name.
     try:
         row = next((r for r in cache.model_rows() if r["gw"] == gw), None)
+        if row is None:
+            dec = next(
+                (d for d in cache.model_decisions() if d["gw"] == gw), None,
+            )
+            if dec:
+                row = {
+                    "gw": gw,
+                    "players": [
+                        {"id": p, "name": els.get(p, {}).get("web_name", f"#{p}"),
+                         "points": live.get(p, 0), "in_xi": True,
+                         "captain": p == dec.get("captain")}
+                        for p in dec["squad"]
+                    ],
+                    "points": None,
+                    "chip": None,
+                    "hits": dec.get("hits", 0),
+                    "transfers": dec.get("transfers", {}),
+                    "pending": True,
+                }
     except Exception:
         row = None
     if row:
@@ -513,6 +533,8 @@ def season_squads(
             "transfers": row.get("transfers", {}),
         }
         return {"gw": gw, "me": mine, "model": model_sq, "rivals": people}
+
+    return {"gw": gw, "me": mine, "model": None, "rivals": people}
 
     model_sq = None
     if mine:

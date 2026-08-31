@@ -19,7 +19,7 @@ log = logging.getLogger("rivalr.store")
 # changes payload content/shape invalidates stale entries instead of
 # serving pre-fix briefs for up to 6 hours (this happened; bump on any
 # payload-affecting change).
-CACHE_SCHEMA_V = 6
+CACHE_SCHEMA_V = 7
 
 
 def cache_key(team_id: int, league_id: int, mode: str, target: int | None,
@@ -67,6 +67,21 @@ class MemoryStore:
     def model_rows(self) -> list[dict]:
         m = getattr(self, "_model", {})
         return [m[g] for g in sorted(m)]
+
+    def put_model_decision(self, gw: int, payload: dict) -> None:
+        self._decisions = getattr(self, "_decisions", {})
+        self._decisions[gw] = payload
+
+    def model_decisions(self) -> list[dict]:
+        d = getattr(self, "_decisions", {})
+        return [d[g] for g in sorted(d)]
+
+    def put_gw_projections(self, gw: int, payload: dict) -> None:
+        self._gwproj = getattr(self, "_gwproj", {})
+        self._gwproj[gw] = payload
+
+    def gw_projections(self, gw: int) -> dict:
+        return getattr(self, "_gwproj", {}).get(gw, {})
 
     def get(self, key: tuple, max_age_s: int = SERVE_TTL_S) -> dict | None:
         hit = self._cache.get(key)
@@ -152,7 +167,51 @@ class PgStore:
             payload JSONB NOT NULL,
             computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )""",
+        """CREATE TABLE IF NOT EXISTS model_decisions (
+            gw INT PRIMARY KEY,
+            payload JSONB NOT NULL,
+            decided_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )""",
+        """CREATE TABLE IF NOT EXISTS gw_projections (
+            gw INT PRIMARY KEY,
+            payload JSONB NOT NULL,
+            recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )""",
     ]
+
+    def put_model_decision(self, gw: int, payload: dict) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO model_decisions (gw, payload, decided_at) "
+                "VALUES (%s,%s,now()) ON CONFLICT (gw) DO UPDATE "
+                "SET payload=EXCLUDED.payload, decided_at=now()",
+                (gw, json.dumps(payload)),
+            )
+            conn.commit()
+
+    def model_decisions(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM model_decisions ORDER BY gw",
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def put_gw_projections(self, gw: int, payload: dict) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO gw_projections (gw, payload, recorded_at) "
+                "VALUES (%s,%s,now()) ON CONFLICT (gw) DO UPDATE "
+                "SET payload=EXCLUDED.payload, recorded_at=now()",
+                (gw, json.dumps(payload)),
+            )
+            conn.commit()
+
+    def gw_projections(self, gw: int) -> dict:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT payload FROM gw_projections WHERE gw=%s", (gw,),
+            ).fetchone()
+        return row[0] if row else {}
 
     def put_model_gw(self, gw: int, payload: dict) -> None:
         with self._conn() as conn:

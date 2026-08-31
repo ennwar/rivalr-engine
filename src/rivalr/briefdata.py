@@ -144,6 +144,18 @@ def build_plan_json(
             "(e.g. too many locked players for the budget or formation)"
         )
 
+    # Pre-deadline projections for the in-progress gameweek, so a sale of
+    # a still-to-play player can show what his remaining fixture is worth
+    # (points that accrue to the owner regardless of the sale).
+    cur_gw_proj: dict[str, float] = {}
+    if live_state is not None:
+        try:
+            from .store import make_store
+
+            cur_gw_proj = make_store().gw_projections(live_state["gw"]) or {}
+        except Exception:
+            log.warning("current-gw projections unavailable", exc_info=True)
+
     def mini(pid: int | None) -> dict | None:
         if pid is None:
             return None
@@ -156,6 +168,10 @@ def build_plan_json(
             "price": el.get("now_cost", 0) / 10.0,
             "projection": round((final.get(pid) or [0.0])[0], 2),
             "still_to_play": el.get("team") in teams_to_play or None,
+            "pending_fixture_xpts": (
+                cur_gw_proj.get(str(pid))
+                if el.get("team") in teams_to_play else None
+            ),
         }
 
     proj_sum_from = lambda pid, i: sum((final.get(pid) or [])[i:]) if pid else 0.0
