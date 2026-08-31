@@ -181,6 +181,7 @@ class OpenFPLModel:
         self._team_name = {t["id"]: t["name"] for t in self._teams}
         season = int(bootstrap["events"][0]["deadline_time"][:4])
         self.understat = understat or Understat(season=season, cache_dir=client.cache_dir)
+        self._played_fixture_ids: set[int] | None = None  # lazy, see _current_rows
 
         self._artifacts_loaded = False
         self._models: dict[str, list] = {}
@@ -332,14 +333,25 @@ class OpenFPLModel:
 
     # -- feature building --------------------------------------------------
 
+    def _current_rows(self, pid: int) -> list[dict]:
+        """Current-season element-summary rows for FINISHED fixtures only.
+        The API pre-creates all-zero rows for unplayed fixtures; feeding
+        one into a form window reads 'hasn't kicked off yet' as 'blanked'."""
+        if self._played_fixture_ids is None:
+            from . import gameweek
+            self._played_fixture_ids = gameweek.played_fixture_ids(self.client)
+        return [
+            h for h in self.client.element_summary(pid).get("history", [])
+            if h.get("fixture") in self._played_fixture_ids
+        ]
+
     def _player_slots(self, pid: int) -> list[dict]:
         """Fixture-slot timeline: previous-season rows (vaastav, by player
         code) + current-season element-summary rows, kickoff order."""
         self._load_prev_season()
         el = self._elements[pid]
         prev = self._prev_rows_by_code.get(str(el.get("code")), [])
-        current = self.client.element_summary(pid).get("history", [])
-        return prev + list(current)  # both already kickoff-sorted
+        return prev + self._current_rows(pid)  # both already kickoff-sorted
 
     def _player_features(
         self, pid: int
@@ -445,7 +457,7 @@ class OpenFPLModel:
             if el is None or el["element_type"] not in POSITIONS:
                 continue
             base, rel_home, rel_away = self._player_features(pid)
-            season_matches[pid] = len(self.client.element_summary(pid).get("history", []))
+            season_matches[pid] = len(self._current_rows(pid))
             base.update(own_block[el["team"]])
             team_fixtures = fixtures.get(el["team"], {})
             for gw in gws:

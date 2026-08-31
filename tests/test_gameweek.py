@@ -89,6 +89,51 @@ def test_score_gw_refuses_incomplete(tmp_path):
         score_gw(c, 2, ledger_dir=tmp_path)
 
 
+# -- phantom history rows (unplayed fixtures) ------------------------------
+
+
+class PhantomStub:
+    """Mid-GW: fixtures 1-2 finished, fixture 3 not kicked off, but the
+    element-summary already carries an all-zero row for fixture 3."""
+
+    def __init__(self):
+        self._fixtures = [
+            {"id": 1, "finished": True, "finished_provisional": True},
+            {"id": 2, "finished": False, "finished_provisional": True},
+            {"id": 3, "finished": False, "finished_provisional": False},
+        ]
+
+    def fixtures(self):
+        return self._fixtures
+
+    def bootstrap(self):
+        return {"elements": [{"id": 8, "status": "a",
+                              "chance_of_playing_next_round": None}]}
+
+    def element_summary(self, pid):
+        return {"history": [
+            {"round": 1, "fixture": 1, "minutes": 90, "starts": 1,
+             "total_points": 9, "kickoff_time": None},
+            # phantom: fixture 3 hasn't kicked off
+            {"round": 2, "fixture": 3, "minutes": 0, "starts": 0,
+             "total_points": 0, "kickoff_time": None},
+        ]}
+
+
+def test_played_fixture_ids_uses_finished_provisional():
+    ids = gameweek.played_fixture_ids(PhantomStub())
+    assert ids == {1, 2}  # finished OR finished_provisional; not unplayed
+
+
+def test_phantom_row_does_not_halve_start_rate():
+    """The Calafiori bug: a pre-kickoff all-zero history row must not be
+    read as a completed 0-minute appearance."""
+    from rivalr.minutes import estimate_minutes
+
+    est = estimate_minutes(PhantomStub(), 8)
+    assert est.p_start == 1.0  # 1 start in 1 REAL match, not 1 in 2
+
+
 # -- free transfers --------------------------------------------------------
 
 

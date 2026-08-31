@@ -15,6 +15,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from . import gameweek
 from .fetch import FPLClient
 
 log = logging.getLogger("rivalr.minutes")
@@ -64,7 +65,14 @@ def estimate_minutes(
     """v0 expected-minutes estimate for one player."""
     bootstrap = client.bootstrap()
     element = next(el for el in bootstrap["elements"] if el["id"] == player_id)
-    history = client.element_summary(player_id).get("history", [])
+    # History rows exist for fixtures that haven't finished (or even kicked
+    # off) yet, as all-zero phantoms. Counting one halves the start rate of
+    # every regular starter whose club hasn't played this GW.
+    done = gameweek.played_fixture_ids(client)
+    history = [
+        h for h in client.element_summary(player_id).get("history", [])
+        if h.get("fixture") in done
+    ]
     played = [h for h in history if h["minutes"] > 0 or h["starts"] > 0]
 
     flags: list[str] = []

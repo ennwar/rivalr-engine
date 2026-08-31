@@ -11,6 +11,19 @@ FPL's flags mean DIFFERENT things and must not be conflated:
                          played fixtures kept finished=False for days
   fixtures[].started     flips at kickoff - the reliable "has been played
                          (at least begun)" signal
+  fixtures[].finished_provisional
+                         flips at full-time (verified 2026-08-31: True for
+                         all played GW2 fixtures while finished was still
+                         False) - the reliable "this match's stats are
+                         real" signal
+
+CRITICAL: element-summary history contains a row for a fixture BEFORE it
+kicks off (minutes=0, points=0, starts=0). Any code that feeds history
+rows into form/minutes features must drop rows whose fixture has not
+finished, or every player at a club with an unplayed fixture is
+systematically treated as having blanked (verified live 2026-08-31:
+Calafiori carried a phantom GW2 row hours before Arsenal kicked off,
+halving his P(start) and his projection). Use played_fixture_ids().
 
 Rules enforced here:
   - next_gw() self-heals stale caches: if the cached is_next deadline has
@@ -87,6 +100,20 @@ def is_complete(client, gw: int) -> bool:
         if e["id"] == gw:
             return bool(e.get("finished")) and bool(e.get("data_checked"))
     return False
+
+
+def played_fixture_ids(client) -> set[int]:
+    """Fixture ids whose stats are real (match reached full-time).
+
+    element-summary history rows exist for fixtures that haven't kicked
+    off yet; filtering history through this set is what stops a phantom
+    0-minute, 0-point row from polluting form windows and start rates.
+    Uses finished_provisional (flips at FT) rather than finished (lags
+    for days)."""
+    return {
+        f["id"] for f in client.fixtures()
+        if f.get("finished") or f.get("finished_provisional")
+    }
 
 
 def fixture_played(fixture: dict) -> bool:
