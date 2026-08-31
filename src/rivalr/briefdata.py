@@ -137,12 +137,19 @@ def build_plan_json(
             "cum_xp": w["cum_xp"],
         })
 
+    try:
+        ft_now = rivals.free_transfers(client, team_id, gw)
+    except Exception:
+        log.warning("free-transfer count unavailable", exc_info=True)
+        ft_now = None
+
     return {
         "gameweek": gw,
         "horizon": horizon,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "locked": locked or [],
         "banned": banned or [],
+        "free_transfers_now": ft_now,
         "total_xp": plan.get("expected_points"),
         "weeks": weeks,
     }

@@ -127,11 +127,9 @@ def _alert(gw: int, message: str) -> None:
 
 
 def _next_deadline(client: FPLClient) -> tuple[int, datetime]:
-    for ev in client.bootstrap()["events"]:
-        if ev["is_next"]:
-            dt = datetime.fromisoformat(ev["deadline_time"].replace("Z", "+00:00"))
-            return ev["id"], dt
-    raise RuntimeError("no upcoming gameweek in bootstrap-static")
+    from . import gameweek
+
+    return gameweek.next_deadline(client)
 
 
 def _check_missed_windows(client: FPLClient, now: datetime) -> None:
@@ -375,6 +373,13 @@ def main() -> int:
         return 2
 
     pushed = _git_publish(gw, path, partial)
+    try:  # cross-service visibility (/health reads this from Postgres)
+        from .store import make_store
+
+        make_store().record_snapshot(gw, path.name, partial)
+    except Exception:
+        log.warning("snapshot meta store failed (ledger unaffected)",
+                    exc_info=True)
     age = client.cache_age("bootstrap-static/")
     _log_run({
         "gw": gw, "action": "written", "partial": partial,

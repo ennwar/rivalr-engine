@@ -308,6 +308,29 @@ def build_rivals_report(
     }
 
 
+def free_transfers(client: FPLClient, team_id: int, upto_gw: int) -> int:
+    """Free transfers available going INTO upto_gw, reconstructed from
+    the entry's actual history (never assumed).
+
+    Rules: 1 FT granted from GW2; unused FTs bank, capped at 5;
+    wildcard/free-hit weeks don't consume FTs; hits can't drive the
+    balance below zero."""
+    hist = client.entry_history(team_id)
+    made_at = {r["event"]: r.get("event_transfers", 0)
+               for r in hist.get("current", [])}
+    chip_at = {c["event"]: c["name"] for c in hist.get("chips", [])}
+
+    if upto_gw <= 1:
+        return 0  # pre-season: unlimited changes, no FT concept
+    ft = 1  # entering GW2
+    for gw in range(2, upto_gw):
+        made = made_at.get(gw, 0)
+        if chip_at.get(gw) in ("wildcard", "freehit"):
+            made = 0
+        ft = min(5, max(ft - made, 0) + 1)
+    return ft
+
+
 def rival_squad(rival: dict) -> set[int]:
     """A rival's full 15 from a rivals-report entry."""
     return set(rival.get("shared", [])) | set(rival.get("their_differentials", []))

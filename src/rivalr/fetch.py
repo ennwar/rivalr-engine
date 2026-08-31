@@ -182,19 +182,15 @@ class FPLClient:
     # -- convenience -------------------------------------------------------
 
     def current_gw(self) -> int:
-        """The current (or next, in pre-season) gameweek id."""
-        events = self.bootstrap()["events"]
-        for ev in events:
-            if ev["is_current"]:
-                return ev["id"]
-        for ev in events:
-            if ev["is_next"]:
-                return ev["id"]
-        raise RuntimeError("no current or next gameweek in bootstrap-static")
+        """The gameweek whose deadline most recently passed. May still
+        have fixtures to play - see rivalr.gameweek for semantics."""
+        from . import gameweek
+
+        return gameweek.current_gw(self)
 
     def next_gw(self) -> int:
-        events = self.bootstrap()["events"]
-        for ev in events:
-            if ev["is_next"]:
-                return ev["id"]
-        raise RuntimeError("no next gameweek (season over?)")
+        """The gameweek transfers currently apply to, with a stale-cache
+        self-heal (single source of truth: rivalr.gameweek)."""
+        from . import gameweek
+
+        return gameweek.next_gw(self)

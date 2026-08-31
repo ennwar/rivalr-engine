@@ -137,6 +137,13 @@ export default function AccuracyPage() {
 
           <section>
             <h2>Live season, gameweek by gameweek</h2>
+            <div className="warn">
+              A handful of gameweeks is noise, not proof - single-GW numbers
+              swing wildly with how many players hauled that week. Judge
+              trends from ~GW8 onward; we publish the early rows anyway
+              because hiding them until they look good would defeat the
+              point of this page.
+            </div>
             {data.live.length === 0 ? (
               <div className="notice">
                 No scored gameweeks yet - the first row appears once GW1

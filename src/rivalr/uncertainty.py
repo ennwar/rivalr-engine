@@ -54,9 +54,14 @@ def team_flags(client: FPLClient) -> dict[int, dict]:
     bootstrap = client.bootstrap()
     by_name = {t["name"]: t["id"] for t in bootstrap["teams"]}
 
+    # started, not finished: FPL leaves per-fixture finished=False for
+    # days after full-time (see rivalr.gameweek docstring), which would
+    # keep these flags alive long after the evidence exists.
+    from .gameweek import fixture_played
+
     played: dict[int, int] = {}
     for f in client.fixtures():
-        if f.get("finished"):
+        if fixture_played(f):
             for tid in (f["team_h"], f["team_a"]):
                 played[tid] = played.get(tid, 0) + 1
 

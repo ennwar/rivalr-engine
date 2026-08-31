@@ -34,6 +34,7 @@ type Plan = {
   horizon: number;
   locked: number[];
   banned: number[];
+  free_transfers_now?: number | null;
   total_xp: number | null;
   weeks: Week[];
   cached?: boolean;
@@ -208,6 +209,14 @@ export default function Planner() {
               {plan.total_xp != null && `${plan.total_xp.toFixed(1)} xPts total`}
             </span>
           </div>
+          {plan.free_transfers_now != null && (
+            <div className="warn" style={{ background: "#14251a", borderColor: "#1f4a2e", color: "var(--green)" }}>
+              You have {plan.free_transfers_now} free transfer
+              {plan.free_transfers_now !== 1 && "s"} going into GW
+              {plan.gameweek} (reconstructed from your actual transfer
+              history, banked FTs included).
+            </div>
+          )}
 
           {plan.weeks.map((w) => (
             <section key={w.gw}>

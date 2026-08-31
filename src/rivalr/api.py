@@ -138,13 +138,12 @@ def _run_job(jid: str, key: tuple, kwargs: dict, builder=None) -> None:
 
 
 def _gw_and_deadline(client) -> tuple[int, datetime]:
-    bootstrap = client.bootstrap()
-    for ev in bootstrap["events"]:
-        if ev["is_next"]:
-            return ev["id"], datetime.fromisoformat(
-                ev["deadline_time"].replace("Z", "+00:00")
-            )
-    raise HTTPException(503, "no upcoming gameweek")
+    from . import gameweek
+
+    try:
+        return gameweek.next_deadline(client)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
 
 
 def _in_pre_deadline_window(deadline: datetime) -> bool:
@@ -159,19 +158,19 @@ def _in_pre_deadline_window(deadline: datetime) -> bool:
 def health():
     client = client_factory()
     gw, deadline = _gw_and_deadline(client)
+    # Snapshot metadata comes from Postgres: snapshots are written on the
+    # worker's volume, which this service cannot see directly.
     last_snapshot = None
     try:
-        snaps = [
-            p for p in ledger.LEDGER_DIR.iterdir()
-            if ledger._SNAPSHOT_RE.match(p.name)
-        ]
-        if snaps:
-            latest = max(snaps, key=lambda p: p.stat().st_mtime)
-            last_snapshot = datetime.fromtimestamp(
-                latest.stat().st_mtime, tz=timezone.utc
-            ).isoformat()
-    except FileNotFoundError:
-        pass
+        meta = cache.last_snapshot()
+        if meta:
+            last_snapshot = {
+                "gw": meta["gw"],
+                "at": meta["recorded_at"],
+                "partial": meta["partial"],
+            }
+    except Exception:
+        log.warning("snapshot meta unavailable", exc_info=True)
     return {
         "status": "ok",
         "gameweek": gw,
@@ -361,24 +360,34 @@ BACKTEST = {
 def accuracy():
     """Public accuracy data: the backtest vs the paper, plus every scored
     live gameweek (paper buckets, base vs DefCon-corrected)."""
-    live = []
+    def row(s: dict) -> dict:
+        return {
+            "gw": s["gw"],
+            "partial_snapshot": s.get("ledger_partial", False),
+            "accuracy": s["accuracy"],
+            "accuracy_base": s.get("accuracy_base"),
+            "counterfactual": s.get("counterfactual"),
+            "unrostered": s.get("unrostered_at_snapshot", {}).get("n", 0),
+        }
+
+    by_gw: dict[int, dict] = {}
+    # Postgres first (scores are produced on the worker's volume and
+    # synced there); local score files fill any gaps (dev).
+    try:
+        for s in cache.scores():
+            by_gw[s["gw"]] = row(s)
+    except Exception:
+        log.warning("score store unavailable", exc_info=True)
     try:
         for p in sorted(ledger.LEDGER_DIR.glob("gw*_score.json")):
             try:
                 s = json.loads(p.read_text(encoding="utf-8"))
-                live.append({
-                    "gw": s["gw"],
-                    "partial_snapshot": s.get("ledger_partial", False),
-                    "accuracy": s["accuracy"],
-                    "accuracy_base": s.get("accuracy_base"),
-                    "counterfactual": s.get("counterfactual"),
-                    "unrostered": s.get("unrostered_at_snapshot", {}).get("n", 0),
-                })
+                by_gw.setdefault(s["gw"], row(s))
             except Exception:
                 log.warning("unreadable score file %s", p.name)
     except FileNotFoundError:
         pass
-    live.sort(key=lambda r: r["gw"])
+    live = [by_gw[g] for g in sorted(by_gw)]
     return {"backtest": BACKTEST, "live": live}
 
 

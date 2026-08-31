@@ -187,8 +187,20 @@ def score_gw(
     client: FPLClient,
     gw: int,
     ledger_dir: str | Path | None = None,
+    force: bool = False,
 ) -> dict:
-    """RMSE/MAE per outcome bucket + transfer counterfactual for one GW."""
+    """RMSE/MAE per outcome bucket + transfer counterfactual for one GW.
+
+    Refuses to score an incomplete gameweek (fixtures unplayed or points
+    not finalised) - scoring live state produces false Zeros. force=True
+    overrides for explicitly-provisional analysis only."""
+    from . import gameweek
+
+    if not force and not gameweek.is_complete(client, gw):
+        raise RuntimeError(
+            f"gw{gw} is not complete (event finished+data_checked required); "
+            f"pass force=True only for explicitly provisional numbers"
+        )
     ledger_dir = Path(ledger_dir) if ledger_dir is not None else LEDGER_DIR
     ledger_path = _latest_ledger_for(gw, ledger_dir)
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))

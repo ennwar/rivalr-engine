@@ -78,7 +78,15 @@ class StubClient:
         }
 
     def bootstrap(self):
-        return {"elements": self._elements}
+        # every gw settled, so score_gw's completeness guard passes
+        return {
+            "elements": self._elements,
+            "events": [
+                {"id": g, "deadline_time": "2026-01-01T00:00:00Z",
+                 "finished": True, "data_checked": True}
+                for g in range(1, 10)
+            ],
+        }
 
     def entry_transfers(self, team_id):
         return []

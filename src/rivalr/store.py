@@ -30,6 +30,23 @@ class MemoryStore:
     def __init__(self) -> None:
         self._cache: dict[tuple, tuple[float, dict]] = {}
         self._pairs: dict[tuple, dict] = {}
+        self._snapshots: list[dict] = []
+        self._scores: dict[int, dict] = {}
+
+    def record_snapshot(self, gw: int, filename: str, partial: bool) -> None:
+        self._snapshots.append({
+            "gw": gw, "filename": filename, "partial": partial,
+            "recorded_at": time.time(),
+        })
+
+    def last_snapshot(self) -> dict | None:
+        return self._snapshots[-1] if self._snapshots else None
+
+    def put_score(self, gw: int, payload: dict) -> None:
+        self._scores[gw] = payload
+
+    def scores(self) -> list[dict]:
+        return [self._scores[g] for g in sorted(self._scores)]
 
     def get(self, key: tuple, max_age_s: int = SERVE_TTL_S) -> dict | None:
         hit = self._cache.get(key)
@@ -93,7 +110,55 @@ class PgStore:
             last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (team_id, league_id, mode, target)
         )""",
+        """CREATE TABLE IF NOT EXISTS snapshot_meta (
+            id SERIAL PRIMARY KEY,
+            gw INT NOT NULL,
+            filename TEXT NOT NULL,
+            partial BOOLEAN NOT NULL,
+            recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )""",
+        """CREATE TABLE IF NOT EXISTS gw_scores (
+            gw INT PRIMARY KEY,
+            payload JSONB NOT NULL,
+            scored_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )""",
     ]
+
+    def record_snapshot(self, gw: int, filename: str, partial: bool) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO snapshot_meta (gw, filename, partial) "
+                "VALUES (%s,%s,%s)", (gw, filename, partial),
+            )
+            conn.commit()
+
+    def last_snapshot(self) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT gw, filename, partial, recorded_at FROM snapshot_meta "
+                "ORDER BY recorded_at DESC LIMIT 1",
+            ).fetchone()
+        if not row:
+            return None
+        return {"gw": row[0], "filename": row[1], "partial": row[2],
+                "recorded_at": row[3].isoformat()}
+
+    def put_score(self, gw: int, payload: dict) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO gw_scores (gw, payload, scored_at) "
+                "VALUES (%s,%s,now()) ON CONFLICT (gw) DO UPDATE "
+                "SET payload=EXCLUDED.payload, scored_at=now()",
+                (gw, json.dumps(payload)),
+            )
+            conn.commit()
+
+    def scores(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM gw_scores ORDER BY gw",
+            ).fetchall()
+        return [r[0] for r in rows]
 
     def __init__(self, dsn: str) -> None:
         import psycopg

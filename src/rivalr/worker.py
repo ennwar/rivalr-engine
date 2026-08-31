@@ -38,23 +38,36 @@ def score_settled_gws() -> None:
     from . import ledger
     from .fetch import FPLClient
 
+    import json as _json
+
+    from .store import make_store
+
     client = FPLClient()
+    st = make_store()
     settled = [
         ev["id"] for ev in client.bootstrap()["events"]
         if ev.get("finished") and ev.get("data_checked")
     ]
     for gw in settled:
         score_file = ledger.LEDGER_DIR / f"gw{gw}_score.json"
-        if score_file.exists():
-            continue
+        if not score_file.exists():
+            try:
+                ledger._latest_ledger_for(gw, ledger.LEDGER_DIR)
+            except FileNotFoundError:
+                continue  # no snapshot to score (e.g. pre-launch gameweeks)
+            log.info("auto-scoring settled gw%d", gw)
+            result = ledger.score_gw(client, gw)
+            log.info("gw%d scored: All rmse=%s", gw,
+                     result["accuracy"]["All"]["rmse"])
+        # sync to Postgres (idempotent upsert) so /accuracy on the web
+        # service sees scores that live on this worker's volume
         try:
-            ledger._latest_ledger_for(gw, ledger.LEDGER_DIR)
-        except FileNotFoundError:
-            continue  # no snapshot to score (e.g. pre-launch gameweeks)
-        log.info("auto-scoring settled gw%d", gw)
-        result = ledger.score_gw(client, gw)
-        log.info("gw%d scored: All rmse=%s", gw,
-                 result["accuracy"]["All"]["rmse"])
+            st.put_score(
+                gw, _json.loads(score_file.read_text(encoding="utf-8"))
+            )
+        except Exception:
+            log.warning("score sync to store failed for gw%d", gw,
+                        exc_info=True)
 
 
 def prewarm_tick() -> None:

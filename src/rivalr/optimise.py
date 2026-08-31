@@ -357,6 +357,18 @@ def solve_all_modes(
         try:
             try:
                 my_data = generate_team_json(team_id, options)
+                # The vendor's FT arithmetic has proven unreliable; use
+                # our reconstruction from the entry's actual history.
+                try:
+                    from .rivals import free_transfers
+
+                    ft = free_transfers(client, team_id, next_gw)
+                    my_data["transfers"]["limit"] = ft
+                    my_data["transfers"]["made"] = 0
+                    log.info("free transfers going into gw%d: %d", next_gw, ft)
+                except Exception:
+                    log.warning("FT reconstruction failed; using vendor value",
+                                exc_info=True)
             except Exception:
                 # Pre-season / before GW1 picks exist: build from scratch
                 # with a full budget, exactly like the vendor's preseason

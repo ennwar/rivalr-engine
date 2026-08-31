@@ -37,7 +37,7 @@ class StubClient:
         for tid, n in finished_per_team.items():
             for _ in range(n):
                 self._fixtures.append(
-                    {"finished": True, "team_h": tid, "team_a": 99}
+                    {"started": True, "finished": False, "team_h": tid, "team_a": 99}
                 )
 
     def bootstrap(self):
