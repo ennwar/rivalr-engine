@@ -65,8 +65,16 @@ type Transfer = {
 
 type Action = { headline: string; why: string; do_nothing: string };
 
+type Live = {
+  gw: number;
+  in_progress: boolean;
+  my_players_to_play?: number;
+  my_players_to_play_names?: string[];
+};
+
 type Brief = {
   action?: Action | null;
+  live?: Live | null;
   free_transfers_now?: number | null;
   gameweek: number;
   deadline: string;
@@ -346,6 +354,18 @@ export default function Page() {
               {myRank ? `rank ${myRank} in league` : "league unranked (pre-season)"}
             </span>
           </div>
+
+          {brief.live?.in_progress && (
+            <div className="warn" style={{ background: "#16233a", borderColor: "var(--accent)", color: "var(--text)" }}>
+              GW{brief.live.gw} in progress
+              {brief.live.my_players_to_play != null &&
+                ` — ${brief.live.my_players_to_play} of your players still to play`}
+              {brief.live.my_players_to_play_names?.length
+                ? ` (${brief.live.my_players_to_play_names.join(", ")})`
+                : ""}
+              . Everything below plans for GW{brief.gameweek}.
+            </div>
+          )}
 
           {brief.action && (
             <section>

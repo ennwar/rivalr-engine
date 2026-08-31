@@ -205,6 +205,8 @@ def build_brief_json(
     target_id: int | None = None,
     horizon: int = 5,
 ) -> dict:
+    from . import gameweek
+
     warnings: list[str] = []
     bootstrap = client.bootstrap()
     elements = {el["id"]: el for el in bootstrap["elements"]}
@@ -213,6 +215,18 @@ def build_brief_json(
     deadline = next(
         ev["deadline_time"] for ev in bootstrap["events"] if ev["id"] == gw
     )
+
+    # Mid-gameweek awareness: if the previous GW is still being played,
+    # say so, and know which teams have not yet kicked off.
+    live_state = None
+    teams_to_play: set[int] = set()
+    cur = gameweek.state(client)["current"]
+    if cur is not None and cur != gw and not gameweek.is_complete(client, cur):
+        for f in client.fixtures():
+            if f.get("event") == cur and not gameweek.fixture_played(f):
+                teams_to_play.update((f["team_h"], f["team_a"]))
+        live_state = {"gw": cur, "in_progress": True,
+                      "teams_to_play": len(teams_to_play)}
 
     # -- projections: base -> defcon -> final -----------------------------
     raw = model.project_all(client, horizon=horizon)
@@ -362,6 +376,13 @@ def build_brief_json(
             rep.get("my_squad", []), key=lambda p: -next_gw_proj.get(p, 0)
         )
     ]
+    if live_state is not None:
+        my_to_play = [
+            elements[pid]["web_name"] for pid in rep.get("my_squad", [])
+            if pid in elements and elements[pid]["team"] in teams_to_play
+        ]
+        live_state["my_players_to_play"] = len(my_to_play)
+        live_state["my_players_to_play_names"] = my_to_play
     if not squad:
         warnings.append(
             "current squad not visible (pre-season or picks unavailable); "
@@ -469,6 +490,11 @@ def build_brief_json(
                 f"Make {n} transfer{'s' if n > 1 else ''} ({moves_txt}) "
                 f"and captain {cap_name}."
             )
+            outs_still_to_play = [
+                t["out"]["name"] for t in real_moves
+                if t["out"] and elements.get(t["out"]["id"], {}).get("team")
+                in teams_to_play
+            ]
             why = (
                 f"{top['in']['name']} projects {top['net_gain']:+.1f} over "
                 f"{top['out']['name']} across the horizon"
@@ -477,6 +503,12 @@ def build_brief_json(
                    f", using {'a free transfer' if n == 1 else 'free transfers'}")
                 + "."
             )
+            if outs_still_to_play and live_state:
+                why += (
+                    f" Note: {', '.join(outs_still_to_play)} still play(s) in "
+                    f"GW{live_state['gw']} - transfers only take effect from "
+                    f"GW{gw}, so you lose nothing from their remaining fixture."
+                )
             do_nothing = (
                 f"Doing nothing keeps "
                 f"{min((ft_now or 1) + 1, 5)} free transfers for next week "
@@ -487,6 +519,7 @@ def build_brief_json(
 
     return {
         "action": action,
+        "live": live_state,
         "free_transfers_now": ft_now,
         "gameweek": gw,
         "deadline": deadline,
