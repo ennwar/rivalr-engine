@@ -58,7 +58,7 @@ export default function Planner() {
   const runId = useRef(0);
 
   const load = useCallback(
-    async (lockedSet: Set<number>, bannedSet: Set<number>, h: number) => {
+    async (lockedSet: Set<number>, bannedSet: Set<number>, h: number, hitsOn: boolean) => {
       const run = ++runId.current;
       setLoading(true);
       setError(null);
@@ -72,7 +72,7 @@ export default function Planner() {
         const q =
           `team_id=${encodeURIComponent(teamId)}` +
           `&league_id=${encodeURIComponent(leagueId)}&horizon=${h}` +
-          (allowHits ? `&hits=1` : "") +
+          (hitsOn ? `&hits=1` : "") +
           (lockedSet.size ? `&locked=${[...lockedSet].join(",")}` : "") +
           (bannedSet.size ? `&banned=${[...bannedSet].join(",")}` : "");
         let r = await fetch(`${API}/plan?${q}`);
@@ -137,7 +137,7 @@ export default function Planner() {
         className="controls"
         onSubmit={(e) => {
           e.preventDefault();
-          void load(locked, banned, horizon);
+          void load(locked, banned, horizon, allowHits);
         }}
       >
         <input
@@ -335,7 +335,7 @@ export default function Planner() {
             <div className="controls" style={{ marginTop: 14 }}>
               <button
                 disabled={loading}
-                onClick={() => void load(locked, banned, horizon)}
+                onClick={() => void load(locked, banned, horizon, allowHits)}
               >
                 re-solve with {locked.size + banned.size} constraint
                 {locked.size + banned.size !== 1 ? "s" : ""}
