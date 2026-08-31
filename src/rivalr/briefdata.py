@@ -407,7 +407,67 @@ def build_brief_json(
     if n_lc:
         warnings.append(f"{n_lc} incoming picks rest on LOW_CONF projections")
 
+    # -- the answer, up front: what to do, why, cost of doing nothing ------
+    try:
+        ft_now = rivals.free_transfers(client, team_id, gw)
+    except Exception:
+        ft_now = None
+    action = None
+    if chosen:
+        cap_name = (
+            elements.get(chosen.get("captain"), {}).get("web_name", "?")
+            if chosen.get("captain") else "?"
+        )
+        real_moves = [t for t in transfers if t["out"] is not None]
+        if not real_moves:
+            if squad:
+                headline = (
+                    f"Bank your free transfer and captain {cap_name}."
+                )
+                why = (
+                    "No available move beats holding this week; banking "
+                    f"takes you to {min((ft_now or 0) + 1, 5)} free transfers "
+                    "next week."
+                )
+                do_nothing = (
+                    "Doing nothing IS this week's recommendation - just set "
+                    f"{cap_name} as captain."
+                )
+            else:
+                headline = f"Enter the recommended draft and captain {cap_name}."
+                why = "Pre-season/no visible squad: the draft below is the plan."
+                do_nothing = "No squad entered means zero points - enter a team."
+        else:
+            moves_txt = "; ".join(
+                f"{t['out']['name']} → {t['in']['name']}" for t in real_moves
+            )
+            top = max(real_moves, key=lambda t: t["net_gain"])
+            gain_total = round(sum(t["net_gain"] for t in real_moves), 1)
+            hits = chosen.get("hits", 0)
+            n = len(real_moves)
+            headline = (
+                f"Make {n} transfer{'s' if n > 1 else ''} ({moves_txt}) "
+                f"and captain {cap_name}."
+            )
+            why = (
+                f"{top['in']['name']} projects {top['net_gain']:+.1f} over "
+                f"{top['out']['name']} across the horizon"
+                + (f"; total {gain_total:+.1f} xPts from the moves" if n > 1 else "")
+                + (f", after {hits} hit(s) costing {4 * hits}" if hits else
+                   f", using {'a free transfer' if n == 1 else 'free transfers'}")
+                + "."
+            )
+            do_nothing = (
+                f"Doing nothing keeps "
+                f"{min((ft_now or 1) + 1, 5)} free transfers for next week "
+                f"but gives up ~{gain_total:.1f} projected points over the "
+                f"horizon."
+            )
+        action = {"headline": headline, "why": why, "do_nothing": do_nothing}
+
     return {
+        "action": action,
+        "free_transfers_now": ft_now,
         "gameweek": gw,
         "deadline": deadline,
         "generated_at": datetime.now(timezone.utc).isoformat(),

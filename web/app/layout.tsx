@@ -24,6 +24,7 @@ export default function RootLayout({
           <a href="/">brief</a>
           <a href="/fixtures">fixtures</a>
           <a href="/planner">planner</a>
+          <a href="/model">vs model</a>
           <a href="/accuracy">accuracy</a>
         </nav>
         {children}

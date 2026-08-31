@@ -327,6 +327,79 @@ def plan(
     return JSONResponse({"job_id": jid, "status": "pending"}, status_code=202)
 
 
+@app.get("/season")
+def season(team_id: int = Query(...), league_id: int = Query(...)):
+    """Me vs the model vs the rivals, cumulatively.
+
+    'Model' = my actual points plus each scored gameweek's
+    recommendation edge (recommended transfers minus my actual ones).
+    That is an approximation - it assumes the model started from my real
+    squad each week rather than compounding its own decisions - and the
+    payload says so."""
+    client = client_factory()
+
+    data = client.league_standings(league_id)
+    rows = data["standings"]["results"] or [
+        {"entry": r["entry"],
+         "player_name": f"{r.get('player_first_name', '')} "
+                        f"{r.get('player_last_name', '')}".strip()}
+        for r in data.get("new_entries", {}).get("results", [])
+    ]
+
+    edges: dict[int, int] = {}
+    try:
+        for s in cache.scores():
+            cf = s.get("counterfactual") or {}
+            edges[s["gw"]] = cf.get("recommendation_edge", 0)
+    except Exception:
+        log.warning("score store unavailable for /season", exc_info=True)
+
+    people = []
+    me = None
+    for r in rows:
+        try:
+            hist = client.entry_history(r["entry"]).get("current", [])
+        except Exception:
+            continue
+        per_gw = {h["event"]: h["points"] - h.get("event_transfers_cost", 0)
+                  for h in hist}
+        gws = sorted(per_gw)
+        cum, total = [], 0
+        for g in gws:
+            total += per_gw[g]
+            cum.append(total)
+        person = {
+            "entry_id": r["entry"],
+            "name": r.get("player_name", str(r["entry"])),
+            "gameweeks": gws,
+            "points": [per_gw[g] for g in gws],
+            "cum": cum,
+        }
+        if r["entry"] == team_id:
+            me = person
+        else:
+            people.append(person)
+
+    model_path = None
+    if me:
+        cum, total = [], 0
+        for i, g in enumerate(me["gameweeks"]):
+            total += me["points"][i] + edges.get(g, 0)
+            cum.append(total)
+        model_path = {
+            "cum": cum,
+            "edges": {str(g): edges.get(g, 0) for g in me["gameweeks"]},
+            "caveat": (
+                "model line = your actual points plus each scored "
+                "gameweek's recommendation edge; unscored gameweeks "
+                "contribute zero edge, and compounding (the model building "
+                "on its own squad) is not simulated"
+            ),
+        }
+
+    return {"me": me, "model": model_path, "rivals": people}
+
+
 @app.get("/fixtures")
 def fixtures(horizon: int = Query(8, ge=1, le=12)):
     from . import fixtures as fx

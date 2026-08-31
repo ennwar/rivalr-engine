@@ -63,7 +63,11 @@ type Transfer = {
   flags: string[];
 };
 
+type Action = { headline: string; why: string; do_nothing: string };
+
 type Brief = {
+  action?: Action | null;
+  free_transfers_now?: number | null;
   gameweek: number;
   deadline: string;
   generated_at: string;
@@ -342,6 +346,25 @@ export default function Page() {
               {myRank ? `rank ${myRank} in league` : "league unranked (pre-season)"}
             </span>
           </div>
+
+          {brief.action && (
+            <section>
+              <div className="hero">
+                <div className="hero-label">this week</div>
+                <div className="hero-headline">{brief.action.headline}</div>
+                <div className="hero-why">{brief.action.why}</div>
+                <div className="hero-nothing">
+                  If you do nothing: {brief.action.do_nothing}
+                </div>
+                {brief.free_transfers_now != null && (
+                  <div className="hero-ft mono">
+                    {brief.free_transfers_now} free transfer
+                    {brief.free_transfers_now !== 1 && "s"} available
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
           {brief.warnings.map((w) => (
             <div className="warn" key={w}>
