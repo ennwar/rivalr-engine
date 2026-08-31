@@ -17,6 +17,13 @@ type Person = {
 type Season = {
   me: Person | null;
   model: { cum: number[]; edges: Record<string, number>; caveat: string } | null;
+  model_team: {
+    name: string;
+    gameweeks: number[];
+    points: number[];
+    cum: number[];
+    hits: number;
+  } | null;
   rivals: Person[];
 };
 
@@ -65,11 +72,17 @@ export default function ModelPage() {
   const series: { name: string; cum: number[]; color: string; dash?: boolean }[] = [
     { name: `me (${me.name.split(" ")[0]})`, cum: me.cum, color: "#4c9df3" },
   ];
+  if (data.model_team)
+    series.push({
+      name: "🤖 The Model (autonomous)",
+      cum: data.model_team.cum,
+      color: "#3fd08c",
+    });
   if (data.model)
     series.push({
-      name: "following the model",
+      name: "you + the advice (secondary)",
       cum: data.model.cum,
-      color: "#3fd08c",
+      color: "#2a7a55",
       dash: true,
     });
   data.rivals.forEach((r, i) =>

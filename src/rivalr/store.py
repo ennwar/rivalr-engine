@@ -19,7 +19,7 @@ log = logging.getLogger("rivalr.store")
 # changes payload content/shape invalidates stale entries instead of
 # serving pre-fix briefs for up to 6 hours (this happened; bump on any
 # payload-affecting change).
-CACHE_SCHEMA_V = 5
+CACHE_SCHEMA_V = 6
 
 
 def cache_key(team_id: int, league_id: int, mode: str, target: int | None,
@@ -59,6 +59,14 @@ class MemoryStore:
 
     def scores(self) -> list[dict]:
         return [self._scores[g] for g in sorted(self._scores)]
+
+    def put_model_gw(self, gw: int, payload: dict) -> None:
+        self._model = getattr(self, "_model", {})
+        self._model[gw] = payload
+
+    def model_rows(self) -> list[dict]:
+        m = getattr(self, "_model", {})
+        return [m[g] for g in sorted(m)]
 
     def get(self, key: tuple, max_age_s: int = SERVE_TTL_S) -> dict | None:
         hit = self._cache.get(key)
@@ -139,7 +147,29 @@ class PgStore:
             payload JSONB NOT NULL,
             scored_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )""",
+        """CREATE TABLE IF NOT EXISTS model_team (
+            gw INT PRIMARY KEY,
+            payload JSONB NOT NULL,
+            computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )""",
     ]
+
+    def put_model_gw(self, gw: int, payload: dict) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO model_team (gw, payload, computed_at) "
+                "VALUES (%s,%s,now()) ON CONFLICT (gw) DO UPDATE "
+                "SET payload=EXCLUDED.payload, computed_at=now()",
+                (gw, json.dumps(payload)),
+            )
+            conn.commit()
+
+    def model_rows(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM model_team ORDER BY gw",
+            ).fetchall()
+        return [r[0] for r in rows]
 
     def record_snapshot(self, gw: int, filename: str, partial: bool) -> None:
         with self._conn() as conn:

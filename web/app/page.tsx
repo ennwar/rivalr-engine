@@ -72,8 +72,16 @@ type Live = {
   my_players_to_play_names?: string[];
 };
 
+type ModelStanding = {
+  name: string;
+  points: number;
+  rank_in_league: number;
+  through_gw: number;
+};
+
 type Brief = {
   action?: Action | null;
+  model_team?: ModelStanding | null;
   live?: Live | null;
   free_transfers_now?: number | null;
   gameweek: number;
@@ -471,6 +479,21 @@ export default function Page() {
               </div>
             ) : (
               <div className="rivals">
+                {brief.model_team && (
+                  <a href="/model" className="rival" style={{ borderColor: "var(--green)", textDecoration: "none" }}>
+                    <div className="name" style={{ color: "var(--green)" }}>
+                      🤖 {brief.model_team.name}
+                    </div>
+                    <div className="meta">
+                      {brief.model_team.points} pts · rank{" "}
+                      {brief.model_team.rank_in_league} · through GW
+                      {brief.model_team.through_gw}
+                    </div>
+                    <div className="chips">
+                      its own draft, its own transfers — tap for squads
+                    </div>
+                  </a>
+                )}
                 {brief.rivals.map((r) => (
                   <button
                     key={r.entry_id}

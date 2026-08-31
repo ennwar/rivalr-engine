@@ -390,14 +390,30 @@ def season(team_id: int = Query(...), league_id: int = Query(...)):
             "cum": cum,
             "edges": {str(g): edges.get(g, 0) for g in me["gameweeks"]},
             "caveat": (
-                "model line = your actual points plus each scored "
-                "gameweek's recommendation edge; unscored gameweeks "
-                "contribute zero edge, and compounding (the model building "
-                "on its own squad) is not simulated"
+                "secondary view: your actual points plus each scored "
+                "gameweek's recommendation edge (you + the advice). The "
+                "autonomous model team below is the primary comparison."
             ),
         }
 
-    return {"me": me, "model": model_path, "rivals": people}
+    # The autonomous model team: its own draft, its own transfers, its
+    # own captain - never sees anyone's squad. Settled GWs only.
+    model_team = None
+    try:
+        rows = cache.model_rows()
+        if rows:
+            model_team = {
+                "name": "The Model",
+                "gameweeks": [r["gw"] for r in rows],
+                "points": [r["points"] for r in rows],
+                "cum": [r["total"] for r in rows],
+                "hits": sum(r.get("hits", 0) for r in rows),
+            }
+    except Exception:
+        log.warning("model team unavailable", exc_info=True)
+
+    return {"me": me, "model": model_path, "model_team": model_team,
+            "rivals": people}
 
 
 @app.get("/season/squads")
@@ -470,7 +486,34 @@ def season_squads(
         else:
             people.append(entry)
 
-    # Model squad: mine with the ledger's recommended transfers applied.
+    # Model squad: the AUTONOMOUS model team's real squad for settled
+    # gameweeks (worker-computed); falls back to the old
+    # "mine + recommended transfers" overlay when no row exists yet.
+    try:
+        row = next((r for r in cache.model_rows() if r["gw"] == gw), None)
+    except Exception:
+        row = None
+    if row:
+        model_sq = {
+            "players": [
+                {"id": p["id"], "name": p["name"], "club": "",
+                 "position": 0, "price_now": 0.0, "points": p["points"],
+                 "captain": p["captain"], "in_xi": p["in_xi"]}
+                for p in row["players"]
+            ],
+            "gw_points": row["points"],
+            "chip": row.get("chip"),
+            "note": (
+                "the autonomous model team's actual squad this gameweek "
+                "(its own draft + its own transfers; solver-validated "
+                "within budget at each deadline"
+                + (f"; {row['hits']} hit(s) taken" if row.get("hits") else "")
+                + ")"
+            ),
+            "transfers": row.get("transfers", {}),
+        }
+        return {"gw": gw, "me": mine, "model": model_sq, "rivals": people}
+
     model_sq = None
     if mine:
         rec_in: list[int] = []

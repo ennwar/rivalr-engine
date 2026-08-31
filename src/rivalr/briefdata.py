@@ -468,6 +468,28 @@ def build_brief_json(
     if n_lc:
         warnings.append(f"{n_lc} incoming picks rest on LOW_CONF projections")
 
+    # The autonomous model team as a fifth league entry (settled GWs
+    # only, so mid-gameweek it's labelled "through GW n").
+    model_standing = None
+    try:
+        from .store import make_store
+
+        rows = make_store().model_rows()
+        if rows:
+            total = rows[-1]["total"]
+            others = [(rep.get("my_total_points") or 0, "me")] + [
+                (r["total_points"], r["name"]) for r in (rep.get("rivals") or [])
+            ]
+            model_standing = {
+                "name": "The Model",
+                "points": total,
+                "rank_in_league": 1 + sum(1 for t, _ in others if t > total),
+                "through_gw": rows[-1]["gw"],
+                "hits_taken": sum(r.get("hits", 0) for r in rows),
+            }
+    except Exception:
+        log.warning("model standing unavailable", exc_info=True)
+
     # -- the answer, up front: what to do, why, cost of doing nothing ------
     try:
         ft_now = rivals.free_transfers(client, team_id, gw)
@@ -539,6 +561,7 @@ def build_brief_json(
 
     return {
         "action": action,
+        "model_team": model_standing,
         "live": live_state,
         "free_transfers_now": ft_now,
         "gameweek": gw,

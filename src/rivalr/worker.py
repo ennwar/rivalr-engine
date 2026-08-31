@@ -177,6 +177,15 @@ def main() -> None:
             log.exception("auto-score tick failed (continuing)")
 
         try:
+            from . import modelteam
+            from .fetch import FPLClient as _C
+            from .store import make_store as _ms
+
+            modelteam.sync(_C(), _ms())
+        except Exception:
+            log.exception("model-team sync failed (continuing)")
+
+        try:
             prewarm_tick()
         except Exception:
             log.exception("prewarm tick failed (continuing)")
