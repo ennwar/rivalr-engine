@@ -8,6 +8,7 @@ degrades to rivals=null plus a warning, never an exception.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from . import defcon, minutes, model, optimise, rivals, uncertainty
@@ -45,6 +46,25 @@ def _player(
         "news": el.get("news") or "",
         "chance_of_playing": el.get("chance_of_playing_next_round"),
     }
+
+
+def build_for_mode(
+    client: FPLClient, team_id: int, league_id: int, mode: str,
+    target: int | None = None,
+) -> dict:
+    """Dispatch a cached-pair mode string to the RIGHT builder. Plan
+    modes ('plan:h5', 'plan:h5:hits') must never be rebuilt with the
+    brief builder - that poisons the plan cache with brief-shaped
+    payloads (this happened; see the pre-warm dispatcher)."""
+    if mode.startswith("plan"):
+        m = re.search(r"h(\d+)", mode)
+        return build_plan_json(
+            client, team_id, league_id,
+            horizon=int(m.group(1)) if m else 5,
+            allow_hits=":hits" in mode,
+        )
+    return build_brief_json(client, team_id, league_id, mode=mode,
+                            target_id=target)
 
 
 def build_plan_json(

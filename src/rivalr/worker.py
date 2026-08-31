@@ -104,12 +104,14 @@ def prewarm_tick() -> None:
         return
     log.info("prewarm: %d pair(s) to refresh (threshold %ds, force=%s)",
              len(keys), threshold, force)
+    from .store import cache_key
+
     for team, league, mode, target, key_gw in keys:
         try:
-            payload = briefdata.build_brief_json(
-                client, team, league, mode=mode, target_id=target or None,
+            payload = briefdata.build_for_mode(
+                client, team, league, mode, target or None
             )
-            st.put((team, league, mode, target, key_gw), payload)
+            st.put(cache_key(team, league, mode, target, key_gw), payload)
             log.info("prewarm: cached %s/%s %s target=%s", team, league,
                      mode, target or "-")
         except Exception:

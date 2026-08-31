@@ -118,7 +118,8 @@ def test_pre_deadline_window_requires_fresh_cache(monkeypatch):
     r2 = client.get("/brief?team_id=1&league_id=2")
     assert calls["n"] == 1 and r2.json()["cached"] is True
     # age the entry past the 30-min window bar: must re-solve
-    key = (1, 2, "points", 0, 1)
+    from rivalr.store import cache_key
+    key = cache_key(1, 2, "points", None, 1)
     ts, payload = api.cache._cache[key]
     api.cache._cache[key] = (_time.time() - api.WINDOW_TTL_S - 5, payload)
     client.get("/brief?team_id=1&league_id=2")

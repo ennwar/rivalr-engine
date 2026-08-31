@@ -15,6 +15,18 @@ import time
 
 log = logging.getLogger("rivalr.store")
 
+# Payload schema version: part of every cache key, so a deploy that
+# changes payload content/shape invalidates stale entries instead of
+# serving pre-fix briefs for up to 6 hours (this happened; bump on any
+# payload-affecting change).
+CACHE_SCHEMA_V = 2
+
+
+def cache_key(team_id: int, league_id: int, mode: str, target: int | None,
+              gw: int) -> tuple:
+    return (team_id, league_id, f"{mode}@v{CACHE_SCHEMA_V}", target or 0, gw)
+
+
 # Serving freshness matches the pre-warm refresh threshold (6h): between
 # refreshes a pre-warmed brief must still serve, or "first visitor gets a
 # cached response" fails for most of the day. Near-deadline freshness is
@@ -75,6 +87,8 @@ class MemoryStore:
         ]
 
     def stale_keys(self, gw: int, older_than_s: int = STALE_REFRESH_S) -> list[tuple]:
+        """Work list of RAW pair tuples (unversioned mode); staleness is
+        judged against the current-version cache key."""
         keys = [
             (p["team_id"], p["league_id"], p["mode"], p["target"] or 0, gw)
             for p in self.pairs()
@@ -82,10 +96,13 @@ class MemoryStore:
         if older_than_s <= 0:  # force refresh: everything is stale
             return keys
         cutoff = time.time() - older_than_s
-        return [
-            k for k in keys
-            if (hit := self._cache.get(k)) is None or hit[0] < cutoff
-        ]
+        out = []
+        for k in keys:
+            vk = cache_key(k[0], k[1], k[2], k[3], k[4])
+            hit = self._cache.get(vk)
+            if hit is None or hit[0] < cutoff:
+                out.append(k)
+        return out
 
 
 class PgStore:
@@ -231,9 +248,9 @@ class PgStore:
         ]
 
     def stale_keys(self, gw: int, older_than_s: int = STALE_REFRESH_S) -> list[tuple]:
-        """Requested pairs whose cache entry for this gw is missing or
-        older than the threshold - the pre-warm work list. A threshold
-        of <= 0 means force-refresh everything."""
+        """Requested pairs whose CURRENT-VERSION cache entry for this gw
+        is missing or older than the threshold - the pre-warm work list
+        (raw, unversioned modes). Threshold <= 0 force-refreshes all."""
         if older_than_s <= 0:
             with self._conn() as conn:
                 rows = conn.execute(
@@ -246,11 +263,11 @@ class PgStore:
                 "SELECT p.team_id, p.league_id, p.mode, p.target "
                 "FROM requested_pairs p LEFT JOIN brief_cache c "
                 "ON c.team_id=p.team_id AND c.league_id=p.league_id "
-                "AND c.mode=p.mode AND c.target=p.target AND c.gw=%s "
+                "AND c.mode = p.mode || %s AND c.target=p.target AND c.gw=%s "
                 "WHERE c.created_at IS NULL "
                 "OR c.created_at < now() - %s * interval '1 second' "
                 "ORDER BY p.hits DESC",
-                (gw, older_than_s),
+                (f"@v{CACHE_SCHEMA_V}", gw, older_than_s),
             ).fetchall()
         return [(r[0], r[1], r[2], r[3], gw) for r in rows]
 

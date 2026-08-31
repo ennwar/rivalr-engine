@@ -2,7 +2,7 @@
 
 import time
 
-from rivalr.store import MemoryStore, SERVE_TTL_S
+from rivalr.store import MemoryStore, SERVE_TTL_S, cache_key
 
 
 def test_record_and_list_pairs():
@@ -27,7 +27,7 @@ def test_stale_keys_missing_and_old():
     s = MemoryStore()
     s.record_pair(1, 2, "points", None)   # never cached -> stale
     s.record_pair(3, 4, "points", None)   # cached fresh -> not stale
-    s.put((3, 4, "points", 0, 5), {"x": 1})
+    s.put(cache_key(3, 4, "points", None, 5), {"x": 1})
     stale = s.stale_keys(gw=5, older_than_s=3600)
     assert (1, 2, "points", 0, 5) in stale
     assert (3, 4, "points", 0, 5) not in stale

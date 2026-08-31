@@ -87,7 +87,7 @@ async def rate_limit(request: Request, call_next):
 
 # -- store (cache + pair tracking) ----------------------------------------
 
-from .store import SERVE_TTL_S, WINDOW_TTL_S, make_store  # noqa: E402
+from .store import SERVE_TTL_S, WINDOW_TTL_S, cache_key, make_store  # noqa: E402
 
 cache = make_store()
 
@@ -190,7 +190,7 @@ def brief(
     _gc_jobs()
     client = client_factory()
     gw, deadline = _gw_and_deadline(client)
-    key = (team_id, league_id, mode, target or 0, gw)
+    key = cache_key(team_id, league_id, mode, target, gw)
 
     # Track the pair so the worker pre-warms it from now on (best-effort).
     try:
@@ -288,7 +288,7 @@ def plan(
         + (f":l{','.join(map(str, sorted(locked_ids)))}" if locked_ids else "")
         + (f":b{','.join(map(str, sorted(banned_ids)))}" if banned_ids else "")
     )
-    key = (team_id, league_id, mode_key, 0, gw)
+    key = cache_key(team_id, league_id, mode_key, None, gw)
 
     # Only the unconstrained base plan joins the pre-warm list; ad-hoc
     # lock combinations are solved on demand.
