@@ -82,10 +82,25 @@ def build_plan_json(
     Hits are OPT-IN: by default the solver may not take any -4s. When
     allowed, every hit week carries raw/penalty/net so the cost is never
     hidden."""
+    from . import gameweek
+
     bootstrap = client.bootstrap()
     elements = {el["id"]: el for el in bootstrap["elements"]}
     teams = {t["id"]: t["name"] for t in bootstrap["teams"]}
     gw = client.next_gw()
+
+    # Mid-gameweek context: the plan starts at the NEXT deadline, but if
+    # the previous GW is still being played the UI must say so, and mark
+    # outgoing players whose fixture hasn't happened yet.
+    live_state = None
+    teams_to_play: set[int] = set()
+    cur = gameweek.state(client)["current"]
+    if cur is not None and cur != gw and not gameweek.is_complete(client, cur):
+        for f in client.fixtures():
+            if f.get("event") == cur and not gameweek.fixture_played(f):
+                teams_to_play.update((f["team_h"], f["team_a"]))
+        live_state = {"gw": cur, "in_progress": True,
+                      "teams_to_play": len(teams_to_play)}
 
     raw = model.project_all(client, horizon=horizon)
     est = {pid: minutes.estimate_minutes(client, pid) for pid in raw}
@@ -140,6 +155,7 @@ def build_plan_json(
             "position": POS.get(el.get("element_type"), "?"),
             "price": el.get("now_cost", 0) / 10.0,
             "projection": round((final.get(pid) or [0.0])[0], 2),
+            "still_to_play": el.get("team") in teams_to_play or None,
         }
 
     proj_sum_from = lambda pid, i: sum((final.get(pid) or [])[i:]) if pid else 0.0
@@ -187,6 +203,7 @@ def build_plan_json(
     return {
         "gameweek": gw,
         "horizon": horizon,
+        "live": live_state,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "locked": locked or [],
         "banned": banned or [],

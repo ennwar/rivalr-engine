@@ -13,7 +13,10 @@ type Mini = {
   position: string;
   price: number;
   projection: number;
+  still_to_play?: boolean | null;
 };
+
+type LiveState = { gw: number; in_progress: boolean };
 
 type Week = {
   gw: number;
@@ -35,6 +38,7 @@ type Week = {
 type Plan = {
   gameweek: number;
   horizon: number;
+  live?: LiveState | null;
   locked: number[];
   banned: number[];
   free_transfers_now?: number | null;
@@ -227,6 +231,14 @@ export default function Planner() {
               {plan.total_xp != null && `${plan.total_xp.toFixed(1)} xPts total`}
             </span>
           </div>
+          {plan.live?.in_progress && (
+            <div className="warn" style={{ background: "#16233a", borderColor: "var(--accent)", color: "var(--text)" }}>
+              GW{plan.live.gw} is still being played. This plan starts at the
+              GW{plan.gameweek} deadline — selling a player does NOT cost you
+              his remaining GW{plan.live.gw} fixture. Consider waiting for
+              GW{plan.live.gw} to finish before committing.
+            </div>
+          )}
           {plan.free_transfers_now != null && (
             <div className="warn" style={{ background: "#14251a", borderColor: "#1f4a2e", color: "var(--green)" }}>
               You have {plan.free_transfers_now} free transfer
@@ -259,6 +271,12 @@ export default function Planner() {
                         <span className="out">
                           − {t.out.name}{" "}
                           <span className="club">{t.out.club}</span>
+                          {t.out.still_to_play && plan.live && (
+                            <span className="chip lowconf"
+                                  title={`still has a GW${plan.live.gw} fixture - his points there are yours no matter what; this sale only applies from GW${plan.gameweek}`}>
+                              plays GW{plan.live.gw}
+                            </span>
+                          )}
                         </span>
                       )}
                       <span className="in">
