@@ -483,18 +483,25 @@ def season_squads(
                     rec_out = cf.get("recommended", {}).get("out", [])
         except Exception:
             pass
-        players = [p for p in mine["players"] if p["id"] not in rec_out]
-        for pid in rec_in:
-            if any(p["id"] == pid for p in players):
-                continue
+        def mini(pid: int, rec: bool) -> dict:
             el = els.get(pid, {})
-            players.append({
+            return {
                 "id": pid, "name": el.get("web_name", f"#{pid}"),
                 "club": tnames.get(el.get("team"), "?"),
                 "position": 0, "price_now": el.get("now_cost", 0) / 10.0,
                 "points": live.get(pid, 0), "captain": False,
-                "in_xi": True, "recommended_in": True,
-            })
+                "in_xi": True, "recommended_in": rec,
+            }
+
+        if len(rec_in) >= 11 and not rec_out:
+            # A full recommended draft (GW1 case): the model's squad IS
+            # the draft, not my squad plus fifteen extras.
+            players = [mini(pid, True) for pid in rec_in]
+        else:
+            players = [p for p in mine["players"] if p["id"] not in rec_out]
+            for pid in rec_in:
+                if not any(p["id"] == pid for p in players):
+                    players.append(mini(pid, True))
         model_sq = {
             "players": players,
             "note": (
