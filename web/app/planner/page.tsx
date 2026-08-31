@@ -18,6 +18,9 @@ type Mini = {
 type Week = {
   gw: number;
   transfers: { out: Mini | null; in: Mini }[];
+  raw_gain?: number;
+  hit_penalty?: number;
+  net_gain?: number;
   banked: boolean;
   free_transfers: number | null;
   hits: number;
@@ -44,6 +47,7 @@ export default function Planner() {
   const [teamId, setTeamId] = useState("2616874");
   const [leagueId, setLeagueId] = useState("517089");
   const [horizon, setHorizon] = useState(5);
+  const [allowHits, setAllowHits] = useState(false);
   const [locked, setLocked] = useState<Set<number>>(new Set());
   const [banned, setBanned] = useState<Set<number>>(new Set());
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -68,6 +72,7 @@ export default function Planner() {
         const q =
           `team_id=${encodeURIComponent(teamId)}` +
           `&league_id=${encodeURIComponent(leagueId)}&horizon=${h}` +
+          (allowHits ? `&hits=1` : "") +
           (lockedSet.size ? `&locked=${[...lockedSet].join(",")}` : "") +
           (bannedSet.size ? `&banned=${[...bannedSet].join(",")}` : "");
         let r = await fetch(`${API}/plan?${q}`);
@@ -160,6 +165,19 @@ export default function Planner() {
             </option>
           ))}
         </select>
+        <button
+          type="button"
+          className={allowHits ? "" : ""}
+          style={{
+            background: allowHits ? "var(--amber)" : "var(--panel)",
+            color: allowHits ? "#0a1524" : "var(--dim)",
+            border: "1px solid var(--border)",
+          }}
+          title="off by default: the plan may not take -4 hits unless you allow it"
+          onClick={() => setAllowHits(!allowHits)}
+        >
+          {allowHits ? "hits allowed" : "no hits"}
+        </button>
         <button disabled={loading || !teamId || !leagueId}>
           {loading ? "solving…" : "get plan"}
         </button>
@@ -252,6 +270,14 @@ export default function Planner() {
                       </span>
                     </div>
                   ))
+                )}
+                {w.hits > 0 && (
+                  <div className="swings" style={{ color: "var(--amber)" }}>
+                    hit justification: raw gain +{w.raw_gain?.toFixed(1)} over
+                    the remaining horizon · penalty −{w.hit_penalty} · net{" "}
+                    {w.net_gain != null && w.net_gain >= 0 ? "+" : ""}
+                    {w.net_gain?.toFixed(1)}
+                  </div>
                 )}
                 {w.itb != null && (
                   <div className="swings">

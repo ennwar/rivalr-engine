@@ -161,6 +161,16 @@ def fetch_manager_state(client: FPLClient, row: dict, gw: int) -> ManagerState:
     state.chips_used = [
         {"name": c["name"], "event": c["event"]} for c in history.get("chips", [])
     ]
+    # A chip being played RIGHT NOW appears in picks.active_chip before
+    # the history endpoint lists it - read both, or live chips are
+    # invisible exactly when they matter most.
+    if state.active_chip and not any(
+        c["name"] == state.active_chip and c["event"] == gw
+        for c in state.chips_used
+    ):
+        state.chips_used.append(
+            {"name": state.active_chip, "event": gw, "live": True}
+        )
     state.transfers = client.entry_transfers(entry_id)
     return state
 

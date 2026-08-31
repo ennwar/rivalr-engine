@@ -268,6 +268,7 @@ def plan(
     horizon: int = Query(5, ge=1, le=8),
     locked: str = Query("", max_length=200),
     banned: str = Query("", max_length=200),
+    hits: bool = Query(False),
 ):
     """Week-by-week transfer plan. Same job/poll pattern as /brief."""
     _gc_jobs()
@@ -283,6 +284,7 @@ def plan(
     locked_ids, banned_ids = ids(locked), ids(banned)
     mode_key = (
         f"plan:h{horizon}"
+        + (":hits" if hits else "")
         + (f":l{','.join(map(str, sorted(locked_ids)))}" if locked_ids else "")
         + (f":b{','.join(map(str, sorted(banned_ids)))}" if banned_ids else "")
     )
@@ -302,7 +304,7 @@ def plan(
         return {"cached": True, **cached}
 
     kwargs = dict(team_id=team_id, league_id=league_id, horizon=horizon,
-                  locked=locked_ids, banned=banned_ids)
+                  locked=locked_ids, banned=banned_ids, allow_hits=hits)
     with _jobs_lock:
         jid = _jobs_by_key.get(key)
         job = _jobs.get(jid) if jid else None

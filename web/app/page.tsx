@@ -24,7 +24,8 @@ type Player = {
 };
 
 type ChipWar = {
-  chips_used: { name: string; event: number }[];
+  active_now?: string | null;
+  chips_used: { name: string; event: number; live?: boolean }[];
   first_set_left: string[];
   expiry_gw: number;
   gws_to_expiry: number;
@@ -366,6 +367,15 @@ export default function Page() {
                   <div className="transfer" key={r.entry_id}>
                     <div className="line">
                       <span style={{ fontWeight: 600 }}>{r.name}</span>
+                      {cw.active_now && (
+                        <span
+                          className="chip"
+                          style={{ background: "var(--red)", color: "#fff" }}
+                          title="active this gameweek - visible from their live picks before it reaches the history endpoint"
+                        >
+                          playing {CHIP_LABEL[cw.active_now] ?? cw.active_now} NOW
+                        </span>
+                      )}
                       <span style={{ marginLeft: "auto" }}>
                         {cw.first_set_left.map((c) => (
                           <span key={c} className="chip newclub" title={`${c} still unused from the first set (expires GW${cw.expiry_gw})`}>

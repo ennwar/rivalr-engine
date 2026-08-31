@@ -54,9 +54,14 @@ def build_plan_json(
     horizon: int = 5,
     locked: list[int] | None = None,
     banned: list[int] | None = None,
+    allow_hits: bool = False,
 ) -> dict:
     """Week-by-week transfer plan (points mode) with lock-in/lock-out
-    constraints passed straight to the MILP."""
+    constraints passed straight to the MILP.
+
+    Hits are OPT-IN: by default the solver may not take any -4s. When
+    allowed, every hit week carries raw/penalty/net so the cost is never
+    hidden."""
     bootstrap = client.bootstrap()
     elements = {el["id"]: el for el in bootstrap["elements"]}
     teams = {t["id"]: t["name"] for t in bootstrap["teams"]}
@@ -93,6 +98,8 @@ def build_plan_json(
         solver_options={
             "locked": locked or [],
             "banned": banned or [],
+            "weekly_hit_limit": 2 if allow_hits else 0,
+            "hit_limit": None if allow_hits else 0,
         },
     )
     plan = plans.get("points")
@@ -115,11 +122,25 @@ def build_plan_json(
             "projection": round((final.get(pid) or [0.0])[0], 2),
         }
 
+    proj_sum_from = lambda pid, i: sum((final.get(pid) or [])[i:]) if pid else 0.0
+
     weeks = []
     for w in plan.get("weeks", []):
         pairs = list(zip(w["transfers_out"], w["transfers_in"]))
         pairs += [(None, p) for p in w["transfers_in"][len(w["transfers_out"]):]]
+        # Hit justification: gain measured over the REMAINING horizon
+        # from this week, minus the -4s. A hit only ever appears when
+        # allow_hits is on, and never without its net shown.
+        wk_idx = w["gw"] - gw
+        raw_gain = round(sum(
+            proj_sum_from(i_, wk_idx) - proj_sum_from(o_, wk_idx)
+            for o_, i_ in pairs
+        ), 1)
+        penalty = 4 * w["hits"]
         weeks.append({
+            "raw_gain": raw_gain,
+            "hit_penalty": penalty,
+            "net_gain": round(raw_gain - penalty, 1),
             "gw": w["gw"],
             "transfers": [
                 {"out": mini(o), "in": mini(i)} for o, i in pairs
@@ -149,6 +170,7 @@ def build_plan_json(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "locked": locked or [],
         "banned": banned or [],
+        "allow_hits": allow_hits,
         "free_transfers_now": ft_now,
         "total_xp": plan.get("expected_points"),
         "weeks": weeks,
@@ -256,6 +278,7 @@ def build_brief_json(
                 if c.get("event") and c["event"] <= rivals.FIRST_SET_EXPIRY_GW
             }
             chip_war = {
+                "active_now": r.get("active_chip"),
                 "chips_used": r.get("chips_used", []),
                 "first_set_left": [
                     c for c in rivals.CHIP_SET if c not in first_half_used
