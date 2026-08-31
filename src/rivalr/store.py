@@ -83,6 +83,17 @@ class MemoryStore:
     def gw_projections(self, gw: int) -> dict:
         return getattr(self, "_gwproj", {}).get(gw, {})
 
+    def add_llm_usage(self, day: str, input_tokens: int, output_tokens: int) -> None:
+        u = self._llm = getattr(self, "_llm", {})
+        row = u.setdefault(day, {"day": day, "calls": 0,
+                                 "input_tokens": 0, "output_tokens": 0})
+        row["calls"] += 1
+        row["input_tokens"] += input_tokens
+        row["output_tokens"] += output_tokens
+
+    def llm_usage(self) -> list[dict]:
+        return [getattr(self, "_llm", {})[d] for d in sorted(getattr(self, "_llm", {}))]
+
     def get(self, key: tuple, max_age_s: int = SERVE_TTL_S) -> dict | None:
         hit = self._cache.get(key)
         if hit and time.time() - hit[0] < max_age_s:
@@ -177,6 +188,12 @@ class PgStore:
             payload JSONB NOT NULL,
             recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )""",
+        """CREATE TABLE IF NOT EXISTS llm_usage (
+            day TEXT PRIMARY KEY,
+            calls INT NOT NULL DEFAULT 0,
+            input_tokens BIGINT NOT NULL DEFAULT 0,
+            output_tokens BIGINT NOT NULL DEFAULT 0
+        )""",
     ]
 
     def put_model_decision(self, gw: int, payload: dict) -> None:
@@ -212,6 +229,27 @@ class PgStore:
                 "SELECT payload FROM gw_projections WHERE gw=%s", (gw,),
             ).fetchone()
         return row[0] if row else {}
+
+    def add_llm_usage(self, day: str, input_tokens: int, output_tokens: int) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO llm_usage (day, calls, input_tokens, output_tokens) "
+                "VALUES (%s, 1, %s, %s) "
+                "ON CONFLICT (day) DO UPDATE SET "
+                "calls = llm_usage.calls + 1, "
+                "input_tokens = llm_usage.input_tokens + EXCLUDED.input_tokens, "
+                "output_tokens = llm_usage.output_tokens + EXCLUDED.output_tokens",
+                (day, input_tokens, output_tokens),
+            )
+
+    def llm_usage(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT day, calls, input_tokens, output_tokens "
+                "FROM llm_usage ORDER BY day",
+            ).fetchall()
+        return [{"day": r[0], "calls": r[1], "input_tokens": r[2],
+                 "output_tokens": r[3]} for r in rows]
 
     def put_model_gw(self, gw: int, payload: dict) -> None:
         with self._conn() as conn:

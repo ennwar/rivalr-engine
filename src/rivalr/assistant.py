@@ -275,7 +275,16 @@ def _template_answer(qid: str, data: dict) -> str:
     )
 
 
-def _llm_translate(question: str, data: dict) -> str | None:
+# Cost guard: hard caps per answer, and every call's token usage is
+# recorded per-day (see /ask/usage). Four users behind a 6h cache is
+# pennies, but the number stays visible before it ever isn't.
+MAX_OUTPUT_TOKENS = 400
+MAX_INPUT_CHARS = 8000  # engine JSON is truncated past this, never grown
+
+
+def _llm_translate(
+    question: str, data: dict, usage_store=None,
+) -> str | None:
     key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get(
         "RIVALR_ANTHROPIC_API_KEY"
     )
@@ -286,20 +295,32 @@ def _llm_translate(question: str, data: dict) -> str | None:
 
         import anthropic
 
+        payload = _json.dumps(data, ensure_ascii=False)
+        if len(payload) > MAX_INPUT_CHARS:
+            log.warning("ask payload truncated %d -> %d chars",
+                        len(payload), MAX_INPUT_CHARS)
+            payload = payload[:MAX_INPUT_CHARS]
+
         client = anthropic.Anthropic(api_key=key)
         msg = client.messages.create(
             model=LLM_MODEL,
-            max_tokens=400,
+            max_tokens=MAX_OUTPUT_TOKENS,
             temperature=0,
             system=SYSTEM_PROMPT,
             messages=[{
                 "role": "user",
-                "content": (
-                    f"QUESTION: {question}\n\nDATA:\n"
-                    f"{_json.dumps(data, ensure_ascii=False)}"
-                ),
+                "content": f"QUESTION: {question}\n\nDATA:\n{payload}",
             }],
         )
+        if usage_store is not None:
+            try:
+                from datetime import date
+                usage_store.add_llm_usage(
+                    date.today().isoformat(),
+                    msg.usage.input_tokens, msg.usage.output_tokens,
+                )
+            except Exception:
+                log.warning("failed to record llm usage", exc_info=True)
         return msg.content[0].text.strip()
     except Exception:
         log.warning("LLM translation failed - using template fallback",
@@ -307,7 +328,10 @@ def _llm_translate(question: str, data: dict) -> str | None:
         return None
 
 
-def answer(client: FPLClient, team_id: int, league_id: int, qid: str) -> dict:
+def answer(
+    client: FPLClient, team_id: int, league_id: int, qid: str,
+    usage_store=None,
+) -> dict:
     q = QUESTIONS.get(qid)
     if q is None:
         return {"question": qid, "answer": "Unknown question.",
@@ -317,7 +341,7 @@ def answer(client: FPLClient, team_id: int, league_id: int, qid: str) -> dict:
     if data.get("unavailable"):
         text, llm_used = _template_answer(qid, data), False
     else:
-        text = _llm_translate(label, data)
+        text = _llm_translate(label, data, usage_store=usage_store)
         llm_used = text is not None
         if text is None:
             text = _template_answer(qid, data)

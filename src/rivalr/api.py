@@ -424,6 +424,24 @@ def ask_questions(team_id: int = Query(...), league_id: int = Query(...)):
     return {"chips": assistant.chips_for(team_id, league_id)}
 
 
+@app.get("/ask/usage")
+def ask_usage():
+    """Daily LLM spend for the assistant, so the cost is visible before
+    it ever isn't. Estimated cost uses claude-haiku-4-5 list pricing
+    ($1/M input, $5/M output)."""
+    rows = cache.llm_usage()
+    for r in rows:
+        r["est_cost_usd"] = round(
+            r["input_tokens"] * 1.0 / 1e6 + r["output_tokens"] * 5.0 / 1e6, 4,
+        )
+    return {
+        "days": rows,
+        "total_est_cost_usd": round(sum(r["est_cost_usd"] for r in rows), 4),
+        "caps": {"max_output_tokens": 400, "max_input_chars": 8000,
+                 "cache_ttl_h": 6},
+    }
+
+
 @app.get("/ask")
 def ask(
     team_id: int = Query(...),
@@ -448,7 +466,7 @@ def ask(
     kwargs = dict(team_id=team_id, league_id=league_id, qid=qid)
 
     def builder(c, **kw):
-        return assistant.answer(c, **kw)
+        return assistant.answer(c, usage_store=cache, **kw)
 
     with _jobs_lock:
         jid = _jobs_by_key.get(key)
