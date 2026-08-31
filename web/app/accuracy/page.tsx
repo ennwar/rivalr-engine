@@ -9,7 +9,19 @@ const API =
 type Bucket = { n: number; rmse: number | null; mae: number | null };
 type Table = Record<string, Bucket>;
 
+type Headline = {
+  through_gw: number;
+  model_points: number;
+  model_rank: number;
+  league_size: number;
+  vs: { name: string; is_me: boolean; points: number; diff: number }[];
+  captain_record: { model: number; human: number; tie: number };
+  transfer_record: { gained: number; lost: number; net_points: number };
+  hits_taken: number;
+};
+
 type Accuracy = {
+  headline?: Headline | null;
   backtest: {
     reference: string;
     note: string;
@@ -90,6 +102,39 @@ export default function AccuracyPage() {
 
       {data && (
         <>
+          {data.headline && (
+            <section>
+              <div className="hero">
+                <div className="hero-label">the model, playing our league</div>
+                <div className="hero-headline">
+                  The Model is rank {data.headline.model_rank} of{" "}
+                  {data.headline.league_size} with {data.headline.model_points}{" "}
+                  points through GW{data.headline.through_gw}.
+                </div>
+                <div className="hero-why">
+                  {data.headline.vs
+                    .map(
+                      (v) =>
+                        `${v.is_me ? "me" : v.name.split(" ")[0]}: ${v.points} pts (model ${v.diff >= 0 ? "+" : ""}${v.diff})`,
+                    )
+                    .join(" · ")}
+                </div>
+                <div className="hero-nothing">
+                  Captain pick: model beat mine{" "}
+                  {data.headline.captain_record.model}×, mine beat it{" "}
+                  {data.headline.captain_record.human}×, tied{" "}
+                  {data.headline.captain_record.tie}× · Recommended transfers
+                  gained points {data.headline.transfer_record.gained}× and
+                  lost {data.headline.transfer_record.lost}× (net{" "}
+                  {data.headline.transfer_record.net_points >= 0 ? "+" : ""}
+                  {data.headline.transfer_record.net_points}) ·{" "}
+                  {data.headline.hits_taken} hit(s) taken. An autonomous team:
+                  its own draft, transfers and captains - it never sees ours.
+                </div>
+              </div>
+            </section>
+          )}
+
           <section>
             <h2>Backtest vs the published OpenFPL paper</h2>
             <div className="notice">{data.backtest.reference}</div>

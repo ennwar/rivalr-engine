@@ -621,7 +621,91 @@ def accuracy():
     except FileNotFoundError:
         pass
     live = [by_gw[g] for g in sorted(by_gw)]
-    return {"backtest": BACKTEST, "live": live}
+
+    # Human-readable headline: the autonomous model team vs the league.
+    headline = None
+    try:
+        from .notify import _load_env
+
+        env = _load_env()
+        team_id = int(env.get("RIVALR_TEAM_ID") or 0)
+        league_id = int(env.get("RIVALR_LEAGUE_ID") or 0)
+        rows = cache.model_rows()
+        if rows and team_id and league_id:
+            client = client_factory()
+            through = rows[-1]["gw"]
+            model_total = rows[-1]["total"]
+
+            standings = client.league_standings(league_id)
+            entries = standings["standings"]["results"] or []
+            vs = []
+            for r in entries:
+                hist = client.entry_history(r["entry"]).get("current", [])
+                # fair comparison: totals through the model's last settled GW
+                total = sum(
+                    h["points"] - h.get("event_transfers_cost", 0)
+                    for h in hist if h["event"] <= through
+                )
+                vs.append({
+                    "name": r.get("player_name", str(r["entry"])),
+                    "is_me": r["entry"] == team_id,
+                    "points": total,
+                    "diff": model_total - total,
+                })
+            vs.sort(key=lambda v: -v["points"])
+            rank = 1 + sum(1 for v in vs if v["points"] > model_total)
+
+            captain = {"model": 0, "human": 0, "tie": 0}
+            for row in rows:
+                gw = row["gw"]
+                m_cap = next(
+                    (p["points"] for p in row["players"] if p.get("captain")), None
+                )
+                try:
+                    picks = client.entry_picks(team_id, gw)["picks"]
+                    my_cap_id = next(
+                        p["element"] for p in picks if p.get("is_captain")
+                    )
+                    live_pts = {
+                        el["id"]: el["stats"]["total_points"]
+                        for el in client.event_live(gw)["elements"]
+                    }
+                    h_cap = live_pts.get(my_cap_id, 0)
+                except Exception:
+                    continue
+                if m_cap is None:
+                    continue
+                if m_cap > h_cap:
+                    captain["model"] += 1
+                elif h_cap > m_cap:
+                    captain["human"] += 1
+                else:
+                    captain["tie"] += 1
+
+            edges = [
+                (r["gw"], (r.get("counterfactual") or {}).get(
+                    "recommendation_edge", 0))
+                for r in cache.scores() if r.get("counterfactual")
+            ]
+            transfer_rec = {
+                "gained": sum(1 for _, e in edges if e > 0),
+                "lost": sum(1 for _, e in edges if e < 0),
+                "net_points": sum(e for _, e in edges),
+            }
+            headline = {
+                "through_gw": through,
+                "model_points": model_total,
+                "model_rank": rank,
+                "league_size": len(vs) + 1,
+                "vs": vs,
+                "captain_record": captain,
+                "transfer_record": transfer_rec,
+                "hits_taken": sum(r.get("hits", 0) for r in rows),
+            }
+    except Exception:
+        log.warning("accuracy headline unavailable", exc_info=True)
+
+    return {"backtest": BACKTEST, "live": live, "headline": headline}
 
 
 @app.get("/league")

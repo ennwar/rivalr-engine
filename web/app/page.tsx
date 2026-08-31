@@ -507,7 +507,7 @@ export default function Page() {
                   >
                     <div className="name">{r.name}</div>
                     <div className="meta">
-                      {r.points} pts
+                      <b>{r.points}</b> pts
                       {r.overlap_pct != null && ` · ${r.overlap_pct}% overlap`}
                     </div>
                     <div className="chips">
@@ -533,7 +533,7 @@ export default function Page() {
             ) : (
               brief.squad.map((p) => (
                 <div className="rowline" key={p.id}>
-                  <span className="pos">{p.position}</span>
+                  <span className={`pos-badge pos-${p.position}`}>{p.position}</span>
                   <span className="pname">
                     {p.name}
                     <span className="club">{p.club}</span>
