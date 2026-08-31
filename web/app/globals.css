@@ -234,6 +234,33 @@ section > h2::before {
 }
 .captain .who { font-weight: 700; font-size: 15px; }
 .captain .why { color: var(--dim); font-size: 12.5px; margin-top: 2px; }
+/* ask rivalr */
+.askchips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.askchips button {
+  background: var(--panel); border: 1px solid var(--border);
+  color: var(--text); border-radius: 999px; padding: 8px 14px;
+  font-size: 12.5px; cursor: pointer; text-align: left;
+}
+.askchips button.active { border-color: var(--accent); color: var(--accent); }
+.askchips button:disabled { opacity: 0.5; }
+.askanswer {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 14px; margin-top: 8px;
+}
+.askanswer .askq { color: var(--faint); font-size: 12px; margin-bottom: 6px; }
+.askanswer .aska { font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
+.askanswer .asksrc { color: var(--faint); font-size: 11px; margin-top: 10px; }
+.askdata {
+  margin-top: 8px; background: var(--bg); border-radius: 8px;
+  padding: 10px; font-size: 10.5px; overflow-x: auto; color: var(--dim);
+  max-height: 300px; overflow-y: auto;
+}
+.askfree {
+  width: 100%; margin-top: 10px; background: var(--panel);
+  border: 1px dashed var(--border); color: var(--faint);
+  padding: 10px 12px; border-radius: 8px; font-size: 13px;
+}
+
 footer {
   margin-top: 28px; color: var(--faint); font-size: 11.5px;
   border-top: 1px solid var(--panel2); padding-top: 10px;

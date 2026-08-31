@@ -416,6 +416,61 @@ def season(team_id: int = Query(...), league_id: int = Query(...)):
             "rivals": people}
 
 
+@app.get("/ask/questions")
+def ask_questions(team_id: int = Query(...), league_id: int = Query(...)):
+    """Contextual suggested-question chips (the primary interface)."""
+    from . import assistant
+
+    return {"chips": assistant.chips_for(team_id, league_id)}
+
+
+@app.get("/ask")
+def ask(
+    team_id: int = Query(...),
+    league_id: int = Query(...),
+    qid: str = Query(..., max_length=24),
+):
+    """Grounded assistant answer. Same job/poll pattern as /brief for
+    slow questions (simulation); cached like everything else."""
+    from . import assistant
+
+    if qid not in assistant.QUESTIONS:
+        raise HTTPException(422, "unknown question id")
+    _gc_jobs()
+    client = client_factory()
+    gw, deadline = _gw_and_deadline(client)
+    key = cache_key(team_id, league_id, f"ask:{qid}", None, gw)
+
+    cached = cache.get(key, max_age_s=SERVE_TTL_S)
+    if cached is not None:
+        return {"cached": True, **cached}
+
+    kwargs = dict(team_id=team_id, league_id=league_id, qid=qid)
+
+    def builder(c, **kw):
+        return assistant.answer(c, **kw)
+
+    with _jobs_lock:
+        jid = _jobs_by_key.get(key)
+        job = _jobs.get(jid) if jid else None
+        if job is None or job["status"] not in ("queued", "running"):
+            jid = uuid.uuid4().hex
+            _jobs[jid] = {"status": "queued", "created": time.time(), "key": key}
+            _jobs_by_key[key] = jid
+            _executor.submit(_run_job, jid, key, kwargs, builder)
+
+    deadline_t = time.time() + SYNC_WAIT_S
+    while time.time() < deadline_t:
+        with _jobs_lock:
+            status = _jobs[jid]["status"]
+            if status == "done":
+                return _jobs[jid]["result"]
+            if status == "failed":
+                raise HTTPException(500, _jobs[jid].get("error", "ask failed"))
+        time.sleep(0.25)
+    return JSONResponse({"job_id": jid, "status": "pending"}, status_code=202)
+
+
 @app.get("/season/squads")
 def season_squads(
     team_id: int = Query(...),

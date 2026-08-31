@@ -187,7 +187,60 @@ export default function Page() {
   const runId = useRef(0);
   const lastQuery = useRef("");
 
+  const [chips, setChips] = useState<{ id: string; label: string }[]>([]);
+  const [askQid, setAskQid] = useState<string | null>(null);
+  const [askAnswer, setAskAnswer] = useState<any | null>(null);
+  const [askLoading, setAskLoading] = useState(false);
+  const [showAskData, setShowAskData] = useState(false);
+
   const countdown = useCountdown(brief?.deadline ?? null);
+
+  useEffect(() => {
+    if (!brief) return;
+    fetch(`${API}/ask/questions?team_id=${teamId}&league_id=${leagueId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setChips(d.chips))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brief]);
+
+  const askQuestion = async (qid: string) => {
+    setAskQid(qid);
+    setAskLoading(true);
+    setAskAnswer(null);
+    setShowAskData(false);
+    try {
+      let r = await fetch(
+        `${API}/ask?team_id=${teamId}&league_id=${leagueId}&qid=${qid}`,
+      );
+      if (r.status === 202) {
+        const { job_id } = await r.json();
+        for (;;) {
+          await new Promise((res) => setTimeout(res, 2000));
+          const s = await fetch(`${API}/brief/status?job_id=${job_id}`);
+          const body = await s.json();
+          if (body.status === "done") {
+            setAskAnswer(body.result);
+            break;
+          }
+          if (body.status === "failed") throw new Error(body.error);
+        }
+      } else if (r.ok) {
+        setAskAnswer(await r.json());
+      } else {
+        throw new Error(`API ${r.status}`);
+      }
+    } catch (e) {
+      setAskAnswer({
+        question: "",
+        answer: `Couldn't compute that right now (${e instanceof Error ? e.message : e}).`,
+        llm_used: false,
+        data: {},
+      });
+    } finally {
+      setAskLoading(false);
+    }
+  };
 
   const load = useCallback(
     async (targetOverride: number | null) => {
@@ -605,6 +658,62 @@ export default function Page() {
                 </div>
               ))
             )}
+          </section>
+
+          <section>
+            <h2>Ask rivalr</h2>
+            <div className="notice">
+              Answers come from the solver and projections — the AI only
+              puts them into words. It never invents a number.
+            </div>
+            <div className="askchips">
+              {chips.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={askQid === c.id ? "active" : ""}
+                  disabled={askLoading}
+                  onClick={() => void askQuestion(c.id)}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            {askLoading && (
+              <div className="notice">computing from engine data…</div>
+            )}
+            {askAnswer && !askLoading && (
+              <div className="askanswer">
+                <div className="askq">{askAnswer.question}</div>
+                <div className="aska">{askAnswer.answer}</div>
+                <div className="asksrc">
+                  {askAnswer.llm_used
+                    ? "worded by AI from engine data only"
+                    : "engine data (readable summary unavailable)"}
+                  {" · "}
+                  <a
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setShowAskData(!showAskData);
+                    }}
+                  >
+                    {showAskData ? "hide" : "show"} the numbers
+                  </a>
+                </div>
+                {showAskData && (
+                  <pre className="askdata">
+                    {JSON.stringify(askAnswer.data, null, 1)}
+                  </pre>
+                )}
+              </div>
+            )}
+            <input
+              className="askfree"
+              placeholder="or ask in your own words (coming next update)"
+              disabled
+              title="free-text questions ship in the next update - answers will be grounded in the same engine data"
+            />
           </section>
 
           <footer>

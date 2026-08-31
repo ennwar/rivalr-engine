@@ -17,7 +17,7 @@ COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY scripts ./scripts
 
-RUN pip install --no-cache-dir . fastapi "uvicorn[standard]" "psycopg[binary]"
+RUN pip install --no-cache-dir . fastapi "uvicorn[standard]" "psycopg[binary]" anthropic
 
 # Persistent state lives on the mounted volume (default /data)
 ENV RIVALR_VENDOR_DIR=/data/vendor \

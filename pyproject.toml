@@ -26,6 +26,7 @@ api = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "psycopg[binary]>=3.1",
+    "anthropic>=0.40",
 ]
 
 [dependency-groups]
