@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+
+import LeaguePicker, { usePersistentIds } from "../components/LeaguePicker";
 
 const API =
   process.env.NEXT_PUBLIC_API_URL ??
@@ -30,6 +32,7 @@ type Season = {
 const RIVAL_COLORS = ["#8494ab", "#5a6980", "#6d7f99", "#4a5568"];
 
 export default function ModelPage() {
+  const [teamId, setTeamId, leagueId, setLeagueId] = usePersistentIds();
   const [data, setData] = useState<Season | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [squads, setSquads] = useState<any | null>(null);
@@ -40,27 +43,56 @@ export default function ModelPage() {
     setSquadGw(g);
     setSquads(null);
     setSquadsLoading(true);
-    fetch(`${API}/season/squads?team_id=2616874&league_id=517089&gw=${g}`)
+    fetch(`${API}/season/squads?team_id=${teamId}&league_id=${leagueId}&gw=${g}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setSquads(d))
       .finally(() => setSquadsLoading(false));
   };
 
-  useEffect(() => {
-    fetch(`${API}/season?team_id=2616874&league_id=517089`)
+  const loadSeason = useCallback(() => {
+    setData(null);
+    setError(null);
+    setSquads(null);
+    setSquadGw(null);
+    fetch(`${API}/season?team_id=${teamId}&league_id=${leagueId}`)
       .then((r) => {
         if (!r.ok) throw new Error(`API ${r.status}`);
         return r.json();
       })
       .then(setData)
       .catch((e) => setError(String(e)));
+  }, [teamId, leagueId]);
+
+  useEffect(() => {
+    loadSeason();
+    // load once with the stored ids; changes go through the form button
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (error) return <main><div className="error">{error}</div></main>;
-  if (!data) return <main><div className="notice">loading season…</div></main>;
+  const idForm = (
+    <form
+      className="controls"
+      onSubmit={(e) => {
+        e.preventDefault();
+        loadSeason();
+      }}
+    >
+      <LeaguePicker
+        teamId={teamId}
+        leagueId={leagueId}
+        onTeamId={setTeamId}
+        onLeagueId={setLeagueId}
+      />
+      <button disabled={!teamId || !leagueId}>load</button>
+    </form>
+  );
+
+  if (error) return <main>{idForm}<div className="error">{error}</div></main>;
+  if (!data) return <main>{idForm}<div className="notice">loading season…</div></main>;
   if (!data.me || data.me.gameweeks.length === 0)
     return (
       <main>
+        {idForm}
         <div className="notice">
           No scored gameweeks yet - this page fills in as the season runs.
         </div>
@@ -106,6 +138,7 @@ export default function ModelPage() {
 
   return (
     <main>
+      {idForm}
       <div className="gwbar">
         <h1>Me vs the model</h1>
       </div>
@@ -113,6 +146,12 @@ export default function ModelPage() {
         Is the tool actually helping, and are your friends beating it?
         Cumulative points: you, the you-that-followed-every-recommendation,
         and each rival.
+      </div>
+      <div className="notice">
+        🤖 The model team is not entered in any league. It drafts and
+        manages its own 15 independently, so its points are the same
+        whichever league you load here - only the humans it&apos;s compared
+        against change.
       </div>
 
       <div className="chartwrap">
@@ -192,7 +231,8 @@ export default function ModelPage() {
                   <div className="line" style={{ fontWeight: 600 }}>
                     {label}
                     <span style={{ marginLeft: "auto" }} className="mono">
-                      {s.gw_points != null && `${s.gw_points} pts · `}
+                      {s.gw_points != null &&
+                        `${s.gw_points} pts${s.live ? " so far (live)" : ""} · `}
                       {s.squad_value != null &&
                         `£${s.squad_value.toFixed(1)}m squad · £${(s.bank ?? 0).toFixed(1)}m ITB`}
                     </span>
@@ -201,6 +241,13 @@ export default function ModelPage() {
                     <div className="swings">played {s.chip}</div>
                   )}
                   {s.note && <div className="swings">{s.note}</div>}
+                  {s.league_independent && (
+                    <div className="swings">
+                      not in this (or any) league - same squad and points
+                      whichever league is loaded; only the comparison
+                      changes
+                    </div>
+                  )}
                   <div style={{ marginTop: 6 }}>
                     {s.players
                       .slice()

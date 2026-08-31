@@ -2,6 +2,8 @@
 
 import { useCallback, useRef, useState } from "react";
 
+import LeaguePicker, { usePersistentIds } from "../components/LeaguePicker";
+
 const API =
   process.env.NEXT_PUBLIC_API_URL ??
   "https://rivalr-engine-production.up.railway.app";
@@ -49,8 +51,7 @@ type Plan = {
 };
 
 export default function Planner() {
-  const [teamId, setTeamId] = useState("2616874");
-  const [leagueId, setLeagueId] = useState("517089");
+  const [teamId, setTeamId, leagueId, setLeagueId] = usePersistentIds();
   const [horizon, setHorizon] = useState(5);
   const [allowHits, setAllowHits] = useState(false);
   const [locked, setLocked] = useState<Set<number>>(new Set());
@@ -145,19 +146,11 @@ export default function Planner() {
           void load(locked, banned, horizon, allowHits);
         }}
       >
-        <input
-          value={teamId}
-          onChange={(e) => setTeamId(e.target.value.trim())}
-          inputMode="numeric"
-          placeholder="FPL team ID"
-          aria-label="FPL team ID"
-        />
-        <input
-          value={leagueId}
-          onChange={(e) => setLeagueId(e.target.value.trim())}
-          inputMode="numeric"
-          placeholder="mini-league ID"
-          aria-label="mini-league ID"
+        <LeaguePicker
+          teamId={teamId}
+          leagueId={leagueId}
+          onTeamId={setTeamId}
+          onLeagueId={setLeagueId}
         />
         <select
           value={horizon}

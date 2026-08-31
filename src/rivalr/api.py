@@ -552,15 +552,36 @@ def season_squads(
                 (d for d in cache.model_decisions() if d["gw"] == gw), None,
             )
             if dec:
+                # In-progress GW: the humans' totals above come from entry
+                # history (live XI points, captain doubled, minus hits, no
+                # auto-subs yet). Compute the model's running total on the
+                # SAME basis or the table compares numbers that mean
+                # different things.
+                from . import modelteam
+                proj = {int(k): v for k, v in
+                        (cache.gw_projections(gw) or {}).items()}
+                etype = {p: els[p]["element_type"]
+                         for p in dec["squad"] if p in els}
+                try:
+                    xi = modelteam._best_xi(dec["squad"], proj, etype)
+                except Exception:
+                    xi = list(dec["squad"])[:11]
+                cap = dec.get("captain")
+                live_total = (
+                    sum(live.get(p, 0) for p in xi)
+                    + (live.get(cap, 0) if cap in xi else 0)
+                    - 4 * dec.get("hits", 0)
+                )
                 row = {
                     "gw": gw,
                     "players": [
                         {"id": p, "name": els.get(p, {}).get("web_name", f"#{p}"),
-                         "points": live.get(p, 0), "in_xi": True,
-                         "captain": p == dec.get("captain")}
+                         "points": live.get(p, 0), "in_xi": p in xi,
+                         "captain": p == cap}
                         for p in dec["squad"]
                     ],
-                    "points": None,
+                    "points": live_total,
+                    "live": True,
                     "chip": None,
                     "hits": dec.get("hits", 0),
                     "transfers": dec.get("transfers", {}),
@@ -571,12 +592,17 @@ def season_squads(
     if row:
         model_sq = {
             "players": [
-                {"id": p["id"], "name": p["name"], "club": "",
-                 "position": 0, "price_now": 0.0, "points": p["points"],
+                {"id": p["id"], "name": p["name"],
+                 "club": tnames.get(els.get(p["id"], {}).get("team"), ""),
+                 "position": 0,
+                 "price_now": els.get(p["id"], {}).get("now_cost", 0) / 10.0,
+                 "points": p["points"],
                  "captain": p["captain"], "in_xi": p["in_xi"]}
                 for p in row["players"]
             ],
             "gw_points": row["points"],
+            "live": row.get("live", False),
+            "league_independent": True,
             "chip": row.get("chip"),
             "note": (
                 "the autonomous model team's actual squad this gameweek "
@@ -783,6 +809,39 @@ def accuracy():
         log.warning("accuracy headline unavailable", exc_info=True)
 
     return {"backtest": BACKTEST, "live": live, "headline": headline}
+
+
+@app.get("/myleagues")
+def myleagues(team_id: int = Query(...)):
+    """The classic mini-leagues this entry is in, for the league picker.
+
+    entry/{id}/ lists every classic league including the giant system
+    ones (Overall, country, region, GW leagues) - those carry
+    league_type 's'; private/invitational mini-leagues carry 'x'. Only
+    the mini-leagues are useful for rival analysis, so system leagues
+    are filtered out. Manual league-ID entry stays as the fallback."""
+    client = client_factory()
+    try:
+        entry = client.entry(team_id)
+    except Exception:
+        raise HTTPException(404, "team not found")
+    leagues = []
+    for lg in (entry.get("leagues") or {}).get("classic", []):
+        if lg.get("league_type") == "s":
+            continue  # Overall / country / region / broadcast leagues
+        leagues.append({
+            "league_id": lg["id"],
+            "name": lg.get("name", str(lg["id"])),
+            "entry_rank": lg.get("entry_rank"),
+            "entry_last_rank": lg.get("entry_last_rank"),
+        })
+    return {
+        "team_id": team_id,
+        "team_name": entry.get("name", ""),
+        "player_name": f"{entry.get('player_first_name', '')} "
+                       f"{entry.get('player_last_name', '')}".strip(),
+        "leagues": leagues,
+    }
 
 
 @app.get("/league")

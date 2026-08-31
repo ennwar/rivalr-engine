@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import LeaguePicker, { usePersistentIds } from "./components/LeaguePicker";
+
 const API =
   process.env.NEXT_PUBLIC_API_URL ??
   "https://rivalr-engine-production.up.railway.app";
@@ -173,8 +175,7 @@ function stageFor(elapsed: number): string {
 // ---- page ----------------------------------------------------------------
 
 export default function Page() {
-  const [teamId, setTeamId] = useState("2616874");
-  const [leagueId, setLeagueId] = useState("517089");
+  const [teamId, setTeamId, leagueId, setLeagueId] = usePersistentIds();
   const [target, setTarget] = useState<number | null>(null);
   const [brief, setBrief] = useState<Brief | null>(null);
   const [league, setLeague] = useState<LeagueEntry[] | null>(null);
@@ -324,19 +325,11 @@ export default function Page() {
           void load(null);
         }}
       >
-        <input
-          value={teamId}
-          onChange={(e) => setTeamId(e.target.value.trim())}
-          inputMode="numeric"
-          placeholder="FPL team ID"
-          aria-label="FPL team ID"
-        />
-        <input
-          value={leagueId}
-          onChange={(e) => setLeagueId(e.target.value.trim())}
-          inputMode="numeric"
-          placeholder="mini-league ID"
-          aria-label="mini-league ID"
+        <LeaguePicker
+          teamId={teamId}
+          leagueId={leagueId}
+          onTeamId={setTeamId}
+          onLeagueId={setLeagueId}
         />
         <button disabled={loading || !teamId || !leagueId}>
           {loading ? "working…" : "get brief"}
