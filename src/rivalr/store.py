@@ -15,7 +15,11 @@ import time
 
 log = logging.getLogger("rivalr.store")
 
-SERVE_TTL_S = 3600          # normal serving freshness
+# Serving freshness matches the pre-warm refresh threshold (6h): between
+# refreshes a pre-warmed brief must still serve, or "first visitor gets a
+# cached response" fails for most of the day. Near-deadline freshness is
+# protected separately by WINDOW_TTL_S.
+SERVE_TTL_S = 6 * 3600
 WINDOW_TTL_S = 1800         # freshness required inside the pre-deadline
                             # window (pre-warmed entries qualify; stale
                             # ones force a live solve)
