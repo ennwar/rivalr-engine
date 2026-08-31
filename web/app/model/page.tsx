@@ -25,6 +25,19 @@ const RIVAL_COLORS = ["#8494ab", "#5a6980", "#6d7f99", "#4a5568"];
 export default function ModelPage() {
   const [data, setData] = useState<Season | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [squads, setSquads] = useState<any | null>(null);
+  const [squadGw, setSquadGw] = useState<number | null>(null);
+  const [squadsLoading, setSquadsLoading] = useState(false);
+
+  const loadSquads = (g: number) => {
+    setSquadGw(g);
+    setSquads(null);
+    setSquadsLoading(true);
+    fetch(`${API}/season/squads?team_id=2616874&league_id=517089&gw=${g}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setSquads(d))
+      .finally(() => setSquadsLoading(false));
+  };
 
   useEffect(() => {
     fetch(`${API}/season?team_id=2616874&league_id=517089`)
@@ -129,6 +142,92 @@ export default function ModelPage() {
           ))}
         </div>
       </div>
+
+      <section>
+        <h2>The squads (the evidence)</h2>
+        <div className="notice">
+          Tap a gameweek to see what the model owned vs what everyone
+          actually owned - XI, captain, budget - so you can check it picks
+          within a real budget.
+        </div>
+        <div className="controls" style={{ marginTop: 8 }}>
+          {gws.map((g) => (
+            <button
+              key={g}
+              type="button"
+              style={{
+                background: squadGw === g ? "var(--accent)" : "var(--panel)",
+                color: squadGw === g ? "#0a1524" : "var(--dim)",
+                border: "1px solid var(--border)", flex: "none",
+              }}
+              onClick={() => loadSquads(g)}
+            >
+              GW{g}
+            </button>
+          ))}
+        </div>
+        {squadsLoading && <div className="notice">loading squads…</div>}
+        {squads && squadGw != null && (
+          <div>
+            {[
+              { label: `me (${squads.me?.name ?? ""})`, s: squads.me },
+              { label: "the model", s: squads.model },
+              ...squads.rivals.map((r: any) => ({ label: r.name, s: r })),
+            ].map(({ label, s }: any) =>
+              s ? (
+                <div className="transfer" key={label}>
+                  <div className="line" style={{ fontWeight: 600 }}>
+                    {label}
+                    <span style={{ marginLeft: "auto" }} className="mono">
+                      {s.gw_points != null && `${s.gw_points} pts · `}
+                      {s.squad_value != null &&
+                        `£${s.squad_value.toFixed(1)}m squad · £${(s.bank ?? 0).toFixed(1)}m ITB`}
+                    </span>
+                  </div>
+                  {s.chip && (
+                    <div className="swings">played {s.chip}</div>
+                  )}
+                  {s.note && <div className="swings">{s.note}</div>}
+                  <div style={{ marginTop: 6 }}>
+                    {s.players
+                      .slice()
+                      .sort((a: any, b: any) => b.points - a.points)
+                      .map((p: any) => {
+                        const mineIds = new Set(
+                          (squads.me?.players ?? []).map((x: any) => x.id),
+                        );
+                        const divergent =
+                          label !== `me (${squads.me?.name ?? ""})` &&
+                          !mineIds.has(p.id);
+                        return (
+                          <span
+                            key={p.id}
+                            className="chip"
+                            style={{
+                              background: divergent ? "#2b2440" : "#20242e",
+                              color: divergent ? "var(--violet)" : "var(--dim)",
+                              margin: "2px 4px 2px 0",
+                              fontSize: 11,
+                            }}
+                            title={`£${p.price_now.toFixed(1)}m now${p.recommended_in ? " · recommended in" : ""}`}
+                          >
+                            {p.name}
+                            {p.captain && " (C)"} {p.points}
+                          </span>
+                        );
+                      })}
+                  </div>
+                </div>
+              ) : null,
+            )}
+            <div className="legend">
+              purple = players you didn&apos;t own that gameweek · numbers are
+              that GW&apos;s points · budget figures are real; player prices
+              shown are current-day
+            </div>
+          </div>
+        )}
+      </section>
 
       <section>
         <h2>Per gameweek</h2>

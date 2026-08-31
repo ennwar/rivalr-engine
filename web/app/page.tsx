@@ -395,7 +395,8 @@ export default function Page() {
           {brief.rivals && brief.rivals.length > 0 && brief.rivals[0].chip_war && (
             <section>
               <h2>Chip war</h2>
-              {brief.rivals[0].chip_war.gws_to_expiry > 0 && (
+              {brief.rivals[0].chip_war.gws_to_expiry > 0 &&
+                brief.rivals[0].chip_war.gws_to_expiry <= 3 && (
                 <div className="warn">
                   first chip set expires GW
                   {brief.rivals[0].chip_war.expiry_gw} —{" "}
@@ -592,8 +593,21 @@ export default function Page() {
       )}
 
       {!brief && !loading && !error && (
-        <div className="notice">
-          Enter your FPL team ID and mini-league ID, then get the brief.
+        <div>
+          <div className="notice" style={{ fontSize: 14, color: "var(--text)" }}>
+            rivalr shows what your transfers do to your position against the
+            specific people in your mini-league — not the 10 million-player
+            field. Projections, rival squads, chip threats, and one clear
+            recommendation per week.
+          </div>
+          <div className="notice" style={{ marginTop: 8 }}>
+            Find both IDs in any FPL URL: on fantasy.premierleague.com your
+            points page looks like{" "}
+            <span className="mono">…/entry/2616874/event/3</span> (team ID
+            2616874) and your league table like{" "}
+            <span className="mono">…/leagues/517089/standings/c</span> (league
+            ID 517089).
+          </div>
         </div>
       )}
     </main>

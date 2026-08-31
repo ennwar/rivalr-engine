@@ -400,6 +400,114 @@ def season(team_id: int = Query(...), league_id: int = Query(...)):
     return {"me": me, "model": model_path, "rivals": people}
 
 
+@app.get("/season/squads")
+def season_squads(
+    team_id: int = Query(...),
+    league_id: int = Query(...),
+    gw: int = Query(..., ge=1, le=38),
+):
+    """The evidence behind the chart: everyone's actual squad for one
+    gameweek, plus the model's squad (mine with the recommended
+    transfers applied). Budget figures are real (entry history); player
+    prices are CURRENT now_cost, labelled approximate."""
+    client = client_factory()
+    bootstrap = client.bootstrap()
+    els = {el["id"]: el for el in bootstrap["elements"]}
+    tnames = {t["id"]: t["short_name"] for t in bootstrap["teams"]}
+    try:
+        live = {el["id"]: el["stats"]["total_points"]
+                for el in client.event_live(gw)["elements"]}
+    except Exception:
+        live = {}
+
+    data = client.league_standings(league_id)
+    rows = data["standings"]["results"] or [
+        {"entry": r["entry"],
+         "player_name": f"{r.get('player_first_name', '')} "
+                        f"{r.get('player_last_name', '')}".strip()}
+        for r in data.get("new_entries", {}).get("results", [])
+    ]
+
+    def squad_of(entry_id: int) -> dict | None:
+        try:
+            picks = client.entry_picks(entry_id, gw)
+        except Exception:
+            return None
+        hist = {h["event"]: h for h in
+                client.entry_history(entry_id).get("current", [])}
+        h = hist.get(gw, {})
+        players = []
+        for p in picks["picks"]:
+            el = els.get(p["element"], {})
+            players.append({
+                "id": p["element"],
+                "name": el.get("web_name", f"#{p['element']}"),
+                "club": tnames.get(el.get("team"), "?"),
+                "position": p["position"],
+                "price_now": el.get("now_cost", 0) / 10.0,
+                "points": live.get(p["element"], 0),
+                "captain": p.get("is_captain", False),
+                "in_xi": p["position"] <= 11,
+            })
+        return {
+            "players": players,
+            "chip": picks.get("active_chip"),
+            "squad_value": h.get("value", 0) / 10.0 if h else None,
+            "bank": h.get("bank", 0) / 10.0 if h else None,
+            "gw_points": h.get("points"),
+        }
+
+    people = []
+    mine = None
+    for r in rows:
+        s = squad_of(r["entry"])
+        if s is None:
+            continue
+        entry = {"entry_id": r["entry"],
+                 "name": r.get("player_name", str(r["entry"])), **s}
+        if r["entry"] == team_id:
+            mine = entry
+        else:
+            people.append(entry)
+
+    # Model squad: mine with the ledger's recommended transfers applied.
+    model_sq = None
+    if mine:
+        rec_in: list[int] = []
+        rec_out: list[int] = []
+        try:
+            for s in cache.scores():
+                if s["gw"] == gw:
+                    cf = s.get("counterfactual") or {}
+                    rec_in = cf.get("recommended", {}).get("in", [])
+                    rec_out = cf.get("recommended", {}).get("out", [])
+        except Exception:
+            pass
+        players = [p for p in mine["players"] if p["id"] not in rec_out]
+        for pid in rec_in:
+            if any(p["id"] == pid for p in players):
+                continue
+            el = els.get(pid, {})
+            players.append({
+                "id": pid, "name": el.get("web_name", f"#{pid}"),
+                "club": tnames.get(el.get("team"), "?"),
+                "position": 0, "price_now": el.get("now_cost", 0) / 10.0,
+                "points": live.get(pid, 0), "captain": False,
+                "in_xi": True, "recommended_in": True,
+            })
+        model_sq = {
+            "players": players,
+            "note": (
+                "your squad with the pre-deadline recommended transfers "
+                "applied - full 15 within your real budget; prices shown "
+                "are current, not purchase"
+            ),
+            "transfers": {"in": rec_in, "out": rec_out},
+        }
+
+    return {"gw": gw, "me": mine, "model": model_sq, "rivals": people}
+
+
 @app.get("/fixtures")
 def fixtures(horizon: int = Query(8, ge=1, le=12)):
     from . import fixtures as fx

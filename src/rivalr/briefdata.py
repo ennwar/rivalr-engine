@@ -364,6 +364,9 @@ def build_brief_json(
         horizon=horizon,
         xmins={pid: e.expected_minutes for pid, e in est.items()},
         requested_mode=mode,
+        # The brief is the recommendation surface: no -4s by default,
+        # same as the planner. Hits live behind the planner's toggle.
+        solver_options={"weekly_hit_limit": 0, "hit_limit": 0},
     )
     chosen = plans.get(mode) or plans.get("points")
     if chosen is None:
