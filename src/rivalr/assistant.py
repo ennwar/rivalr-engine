@@ -302,10 +302,11 @@ def _llm_translate(
             payload = payload[:MAX_INPUT_CHARS]
 
         client = anthropic.Anthropic(api_key=key)
+        # NOTE: no temperature param - the anthropic 1.x SDK removed it
+        # from Messages.create (verified in production 2026-09-01).
         msg = client.messages.create(
             model=LLM_MODEL,
             max_tokens=MAX_OUTPUT_TOKENS,
-            temperature=0,
             system=SYSTEM_PROMPT,
             messages=[{
                 "role": "user",
