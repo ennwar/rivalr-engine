@@ -19,7 +19,7 @@ log = logging.getLogger("rivalr.store")
 # changes payload content/shape invalidates stale entries instead of
 # serving pre-fix briefs for up to 6 hours (this happened; bump on any
 # payload-affecting change).
-CACHE_SCHEMA_V = 11  # v11: captain board opp_last5 replaces FDR
+CACHE_SCHEMA_V = 12  # v12: opp form window composition + thin-data flag
 
 
 def cache_key(team_id: int, league_id: int, mode: str, target: int | None,

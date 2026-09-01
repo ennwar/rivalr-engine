@@ -572,7 +572,7 @@ export default function Page() {
                           <th style={{ textAlign: "left" }}>candidate</th>
                           <th>xPts</th>
                           <th>fixture</th>
-                          <th>opp last 5</th>
+                          <th>opp recent PL form</th>
                           <th>margin</th>
                         </tr>
                       </thead>
@@ -593,11 +593,16 @@ export default function Page() {
                               </td>
                               <td className="mono" style={{ whiteSpace: "nowrap" }}>
                                 {c.fixtures
-                                  .map((f: any) =>
-                                    f.opp_last5
-                                      ? `${f.opp_last5.xga_per_match} xGA · ${f.opp_last5.conceded} con · ${f.opp_last5.clean_sheets} CS`
-                                      : "no data",
-                                  )
+                                  .map((f: any) => {
+                                    const o = f.opp_last5;
+                                    if (!o) return "no data";
+                                    const basis = o.thin
+                                      ? `only ${o.matches} PL gms ⚠`
+                                      : o.prev_season_matches > 0
+                                        ? `${o.matches} gms · ${o.prev_season_matches} last szn`
+                                        : `${o.matches} gms`;
+                                    return `${o.xga_per_match} xGA · ${o.conceded} con · ${o.clean_sheets} CS (${basis})`;
+                                  })
                                   .join(" / ") || "—"}
                               </td>
                               <td className="mono">
@@ -627,10 +632,15 @@ export default function Page() {
                         })}
                     </div>
                     <div className="legend">
-                      margin = lead over the next candidate · opp last 5 =
-                      the opponent&apos;s actual recent defence (xGA per
-                      match, goals conceded, clean sheets over their last
-                      5) — the evidence the call rests on · blend = the
+                      margin = lead over the next candidate · opp recent PL
+                      form = the opponent&apos;s actual defence (xGA per
+                      match, goals conceded, clean sheets) over up to their
+                      last 5 Premier League matches — real matches only,
+                      nothing padded: promoted clubs have only this
+                      season&apos;s games (⚠ = fewer than 5 exist), and
+                      established clubs&apos; window can include last
+                      May&apos;s fixtures, labelled &quot;last szn&quot; ·
+                      blend = the
                       model&apos;s own raw output vs FPL&apos;s ep_next
                       before minutes/DefCon adjustments (early-season
                       cold-start; model share grows with matches played)

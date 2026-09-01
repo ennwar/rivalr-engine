@@ -610,8 +610,19 @@ def opponent_form(fpl_team_id: int, last: int = 5) -> dict | None:
     tail = hist[-last:]
     if not tail:
         return None
+    # Understat PREMIER LEAGUE matches only: no Championship, no
+    # friendlies. Promoted clubs therefore have only this season's
+    # matches; established clubs' window can reach back into last
+    # May's fixtures. Raw means over the matches actually present -
+    # nothing is padded or shrunk. The counts below exist so the UI
+    # can say which basis a number stands on.
+    season_start = f"{m.understat.season}-07-01"
+    cur = sum(1 for x in tail if str(x.get("date", "")) >= season_start)
     return {
         "matches": len(tail),
+        "current_season_matches": cur,
+        "prev_season_matches": len(tail) - cur,
+        "thin": len(tail) < last,
         "xga_per_match": round(sum(float(x["xGA"]) for x in tail) / len(tail), 2),
         "conceded": sum(int(x["missed"]) for x in tail),
         "clean_sheets": sum(1 for x in tail if int(x["missed"]) == 0),
