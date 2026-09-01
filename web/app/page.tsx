@@ -572,7 +572,7 @@ export default function Page() {
                           <th style={{ textAlign: "left" }}>candidate</th>
                           <th>xPts</th>
                           <th>fixture</th>
-                          <th>FDR</th>
+                          <th>opp last 5</th>
                           <th>margin</th>
                         </tr>
                       </thead>
@@ -591,10 +591,14 @@ export default function Page() {
                                       .join(", ")
                                   : "blank"}
                               </td>
-                              <td className="mono">
+                              <td className="mono" style={{ whiteSpace: "nowrap" }}>
                                 {c.fixtures
-                                  .map((f: any) => f.difficulty ?? "?")
-                                  .join(", ") || "—"}
+                                  .map((f: any) =>
+                                    f.opp_last5
+                                      ? `${f.opp_last5.xga_per_match} xGA · ${f.opp_last5.conceded} con · ${f.opp_last5.clean_sheets} CS`
+                                      : "no data",
+                                  )
+                                  .join(" / ") || "—"}
                               </td>
                               <td className="mono">
                                 {c.margin_over_next != null
@@ -623,12 +627,13 @@ export default function Page() {
                         })}
                     </div>
                     <div className="legend">
-                      margin = lead over the next candidate · FDR =
-                      FPL&apos;s 1–5 fixture difficulty for the
-                      candidate&apos;s team · blend = the model&apos;s own
-                      raw output vs FPL&apos;s ep_next before minutes/DefCon
-                      adjustments (early-season cold-start; model share
-                      grows with matches played)
+                      margin = lead over the next candidate · opp last 5 =
+                      the opponent&apos;s actual recent defence (xGA per
+                      match, goals conceded, clean sheets over their last
+                      5) — the evidence the call rests on · blend = the
+                      model&apos;s own raw output vs FPL&apos;s ep_next
+                      before minutes/DefCon adjustments (early-season
+                      cold-start; model share grows with matches played)
                     </div>
                   </div>
                 )}

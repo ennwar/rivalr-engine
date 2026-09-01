@@ -594,6 +594,30 @@ def blend_report() -> dict[int, dict]:
     return _default_model.blend_report() if _default_model else {}
 
 
+def opponent_form(fpl_team_id: int, last: int = 5) -> dict | None:
+    """A club's recent defensive record from understat: xGA per match,
+    goals conceded, and clean sheets over the last `last` matches.
+    Evidence for single-gameweek decisions - a September opponent and a
+    March opponent are different teams. None when no data (or no
+    project_all has loaded understat yet)."""
+    m = _default_model
+    if m is None or not getattr(m, "_us_ready", False):
+        return None
+    from .understat import FPL_TO_UNDERSTAT_TEAM
+
+    name = m._team_name.get(fpl_team_id, "")
+    hist = m._us_team_hist.get(FPL_TO_UNDERSTAT_TEAM.get(name, name), [])
+    tail = hist[-last:]
+    if not tail:
+        return None
+    return {
+        "matches": len(tail),
+        "xga_per_match": round(sum(float(x["xGA"]) for x in tail) / len(tail), 2),
+        "conceded": sum(int(x["missed"]) for x in tail),
+        "clean_sheets": sum(1 for x in tail if int(x["missed"]) == 0),
+    }
+
+
 def project(player_id: int, horizon: int) -> list[float]:
     """Stable signature: per-GW xPts for one player over the horizon."""
     global _default_model

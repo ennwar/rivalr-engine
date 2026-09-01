@@ -486,16 +486,23 @@ def build_brief_json(
         fx_next = [f for f in client.fixtures() if f.get("event") == gw]
 
         def _fixture_info(team_id: int) -> list[dict]:
+            # Opponent context = their ACTUAL recent defensive numbers,
+            # not FPL's static season-long FDR: captaincy is a
+            # single-gameweek decision and September-Everton and
+            # March-Everton are different teams.
             out = []
             for f in fx_next:
                 if f["team_h"] == team_id:
-                    out.append({"opponent": short.get(f["team_a"], "?"),
-                                "venue": "H",
-                                "difficulty": f.get("team_h_difficulty")})
+                    opp_id, venue = f["team_a"], "H"
                 elif f["team_a"] == team_id:
-                    out.append({"opponent": short.get(f["team_h"], "?"),
-                                "venue": "A",
-                                "difficulty": f.get("team_a_difficulty")})
+                    opp_id, venue = f["team_h"], "A"
+                else:
+                    continue
+                out.append({
+                    "opponent": short.get(opp_id, "?"),
+                    "venue": venue,
+                    "opp_last5": model.opponent_form(opp_id),
+                })
             return out
 
         ranked = sorted(

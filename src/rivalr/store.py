@@ -19,7 +19,7 @@ log = logging.getLogger("rivalr.store")
 # changes payload content/shape invalidates stale entries instead of
 # serving pre-fix briefs for up to 6 hours (this happened; bump on any
 # payload-affecting change).
-CACHE_SCHEMA_V = 10  # v10: cold-start blend 5->3 matches + blend split in board
+CACHE_SCHEMA_V = 11  # v11: captain board opp_last5 replaces FDR
 
 
 def cache_key(team_id: int, league_id: int, mode: str, target: int | None,

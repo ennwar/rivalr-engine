@@ -1,7 +1,71 @@
-# Fixture adjustment layer — DESIGN ONLY, not built
+# Fixture adjustment layer — CALIBRATED, FAILED ITS GATES, NOT SHIPPED
 
-Status: awaiting sign-off. Nothing in this document is implemented; no
-production code path references it. (2026-09-01)
+Status: approved to build 2026-09-01 with amendments (FDR dropped
+entirely; recent-form windows; real opponent numbers replace FDR in the
+captain board). Calibration ran the same day on the full 2025-26 season
+(29,757 player-GW rows, scripts/fixture_layer_calib.py) and FAILED the
+validation gates fixed below before any code was written. Per those
+gates, the layer is NOT in production. The captain-board display change
+shipped; the adjustment did not. Failing run preserved here.
+
+## Pre-build check result (the question that had to be answered first)
+
+Is the model underweighting a good signal, or is the signal weak?
+
+- **Attacking channel (MID/FWD vs opponent last-5 xGA)**: the signal
+  itself is weak at single-gameweek granularity. Actual points across
+  opponent-form quintiles: 3.73, 4.27, 3.84, 3.79, 4.34 — essentially
+  flat and non-monotone. The model's response (2.88 -> 3.32 across the
+  same quintiles) is small because the true effect is small. The
+  intuition that attackers reliably cash in on soft fixtures is not
+  supported week-to-week; single-match variance swamps opponent
+  strength. The model's narrow opponent-swap range is mostly CORRECT.
+- **Clean-sheet channel (GK/DEF vs opponent last-5 xG)**: real slope
+  exists (actual 4.19 -> 3.21 across quintiles); the model captures
+  about two-thirds of it (2.89 -> 2.25). Mild underweighting.
+- **Venue**: the one genuinely missed signal. Real home-away gap +0.35
+  (MID/FWD) and +0.44 (GK/DEF); the model's gap is ~0.00.
+
+## Calibration outcome (2025-26, OOF 5-fold by GW blocks)
+
+Grid over window W in {4,5,6} x shrinkage m in {2,4,6}; every config
+WORSENED overall OOF RMSE by ~0.5% and the Zeros bucket by ~3%.
+Against the pre-agreed gates, best config (W=4, m=2):
+
+- played-RMSE 2.9168 -> 2.9180 (-0.04%; gate required >= +0.5% cut) FAIL
+- Zeros bucket +3.16% (gate: no bucket worse than 2%) FAIL
+- top-30 Spearman 0.168 -> 0.177 (not falling) pass
+- decile calibration slope 0.64 (gate 0.6-1.4) pass, barely, with
+  non-monotone deciles
+
+Post-hoc variants, reported for transparency (NOT shipped - they were
+not the pre-agreed design): venue-only +0.10% played-RMSE (below gate,
+Zeros +2.3%); defence-only -0.06%. Nothing clears the bar.
+
+Harness caveats, disclosed: availability = 1.0 for everyone (vaastav
+has no point-in-time flags) and no minutes scaling, which inflates the
+Zeros contamination; but played-RMSE is unaffected by Zeros and is
+flat, so the conclusion does not rest on the artifact.
+
+## Decision
+
+The gates said: if they fail, the layer does not ship and the failing
+run is preserved. They failed. The single-GW fixture signal the layer
+was meant to amplify is mostly noise for attackers, mildly present for
+defenders, and the venue gap - though real - is worth ~0.1% RMSE, under
+the bar. Revisit only with materially new evidence (e.g. multi-season
+calibration corpus, or live 2026-27 evidence by GW8 that projections
+systematically miss fixture effects).
+
+What DID ship from this work: the captain board now shows each
+opponent's actual last-5 defensive record (xGA/match, goals conceded,
+clean sheets) instead of FPL's static FDR - the evidence a
+single-gameweek call should rest on.
+
+---
+
+The original design as approved (with amendments) follows, for the
+record.
 
 ## Problem, measured
 
@@ -37,9 +101,13 @@ parameters in total, deliberately tiny).
 - **D_opp** — opponent threat for the clean-sheet channel (GK/DEF):
   same construction on opponent xG per 90.
 - **home(f)** — plus/minus venue indicator.
-- **F(f)** — FPL FDR bridge, `(3 - FDR) / 2`, as a third regressor.
-  Expectation: FDR mostly collapses onto A/D once shrinkage works; if
-  its fitted coefficient is ~0 it is dropped before shipping.
+- ~~F(f) — FPL FDR bridge~~ — REMOVED at approval (2026-09-01): FDR is
+  a season-long static rating and captaincy is a single-gameweek
+  decision; September-Everton and March-Everton are different teams.
+  Only current-form opponent measures are used. Recent form weighted
+  heavily: the window grid was {4,5,6} matches (not season-long), all
+  matches rather than venue-split because a venue-split last-5 leaves
+  2-3 matches of signal; venue enters as its own additive term.
 
 Caps and floors:
 - |adj| <= 1.5 pts (the scale of inter-fixture spread the model
