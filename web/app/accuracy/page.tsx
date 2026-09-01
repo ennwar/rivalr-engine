@@ -279,6 +279,45 @@ export default function AccuracyPage() {
           </section>
 
           <section>
+            <h2>Where we were wrong, and what we changed</h2>
+            <div className="transfer">
+              <div className="line" style={{ fontWeight: 600 }}>
+                We retired FPL&apos;s ep_next from projections (GW3, 2026-09-02)
+              </div>
+              <div className="swings" style={{ marginTop: 6 }}>
+                Early season we blended the model with FPL&apos;s own
+                &quot;expected points&quot;. Then we measured it: across 357
+                players, ep_next correlates 0.993 with the form stat —
+                two gameweeks in it is literally a trailing average of
+                two matches, with no fixture or venue content. Its
+                track record here: GW1 it predicted 3.1 for both
+                B.Fernandes and Haaland (both scored 2); GW2 it
+                predicted 4.4 and 4.3 (they scored 23 and 13). Worse,
+                it then chases whatever it missed — one 23-point haul
+                pushed a +2.0 captain gap that our own model called a
+                coin flip. ep_next now only covers GW1–2, when the
+                model has no season data at all.
+              </div>
+            </div>
+            <div className="transfer">
+              <div className="line" style={{ fontWeight: 600 }}>
+                We priced home advantage (GW3, 2026-09-02) — and it can
+                be falsified
+              </div>
+              <div className="swings" style={{ marginTop: 6 }}>
+                On 29,757 player-gameweeks of 2025-26, home is worth
+                +0.375 points per match for attackers and +0.440 for
+                defenders/keepers; our model priced it at ~zero. Now
+                added (±half that, home vs away), recorded as its own
+                ledger layer. The standing commitment, written before
+                shipping: it must improve home-vs-away ordering
+                accuracy over GW3–GW8 or it comes out — same deal as
+                DefCon.
+              </div>
+            </div>
+          </section>
+
+          <section>
             <h2>Known limitations, in plain English</h2>
             {LIMITATIONS.map((l) => (
               <div className="transfer" key={l.title}>

@@ -291,9 +291,34 @@ def take_snapshot(
         }
         for el in elements
     }
+    # Fourth layer: the venue term's contribution to the FINAL number
+    # (pre-blend adjustment x blend weight x minutes factor), recorded
+    # separately so post-GW scoring can attribute error to it - same
+    # earns-its-place discipline as DefCon. "base" excludes it.
+    venue_final: dict[int, list[float]] = {}
+    try:
+        vr = model.venue_report()
+        blend = model.blend_report()
+        for pid, adjs in vr.items():
+            if pid not in base:
+                continue
+            w = (blend.get(pid) or {}).get("model_weight", 1.0)
+            f = est[pid].factor if pid in est else 1.0
+            venue_final[pid] = [round(a * w * f, 3) for a in adjs]
+        base = {
+            pid: [
+                round(x - (venue_final.get(pid) or [0.0] * len(xs))[i], 3)
+                for i, x in enumerate(xs)
+            ]
+            for pid, xs in base.items()
+        }
+    except Exception as exc:
+        failures.append(f"venue layer attribution: {exc!r}")
+        venue_final = {}
+
     path = ledger.record_predictions(
         gw, coverage, recommendation, partial=partial, failures=failures,
-        layers={"base": base, "defcon": dc_corr},
+        layers={"base": base, "venue": venue_final, "defcon": dc_corr},
         availability=availability,
     )
     return path, partial, failures

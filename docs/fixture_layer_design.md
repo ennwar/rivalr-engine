@@ -62,6 +62,34 @@ opponent's actual last-5 defensive record (xGA/match, goals conceded,
 clean sheets) instead of FPL's static FDR - the evidence a
 single-gameweek call should rest on.
 
+## Addendum 2026-09-02: the VENUE term shipped on its own
+
+Approved separately after the GW3 captain investigation (Bruno-vs-
+Haaland decomposition) showed the missing venue term flipping the
+model's own top pick. Rationale for shipping despite the global layer's
+failed gate: that gate was sized for a speculative multi-feature layer
+with many ways to overfit; this is ONE parameter per position group,
+sign known in advance, fitted on 29,757 rows, landing where football
+knowledge predicts. Pricing a real measured effect at exactly zero is
+itself a defect.
+
+Shipped values (pre-blend, never applied to ep_next; centred so home
+gets +coef/2 and away -coef/2):
+- MID/FWD: home coefficient +0.375  (+/- 0.187 per match)
+- GK/DEF:  home coefficient +0.440  (+/- 0.220 per match)
+
+Recorded as the fourth ledger layer ("venue": pre-blend adjustment x
+blend weight x minutes factor) so post-GW scoring attributes error to
+it independently.
+
+FALSIFIABLE EXPECTATION (recorded before shipping, judged at GW8):
+over GW3-GW8, the venue adjustment must improve home-vs-away ordering
+accuracy - measured as the fraction of (home player, away player)
+pairs, both >= 60 minutes, where the higher-projected player scored
+more, with-venue vs without-venue (the without-venue counterfactual is
+exactly recoverable from the ledger's venue layer). If it does not
+improve, the term comes out - same standing commitment as DefCon.
+
 ---
 
 The original design as approved (with amendments) follows, for the

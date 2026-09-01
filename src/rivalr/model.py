@@ -461,7 +461,7 @@ class OpenFPLModel:
         own_block = {t["id"]: self._team_block(t["id"], "team") for t in self._teams}
 
         rows: list[dict] = []
-        meta: list[tuple[int, int]] = []  # (player_id, gw)
+        meta: list[tuple[int, int, bool]] = []  # (player_id, gw, home)
         season_matches: dict[int, int] = {}
         for pid in pool:
             el = self._elements.get(pid)
@@ -480,7 +480,7 @@ class OpenFPLModel:
                     row.update(opp_block[fx["opponent"]])
                     row["_pos"] = POSITIONS[el["element_type"]]
                     rows.append(row)
-                    meta.append((pid, gw))
+                    meta.append((pid, gw, fx["home"]))
 
         if not rows:
             return {}
@@ -492,28 +492,61 @@ class OpenFPLModel:
         results: dict[int, list[float]] = {
             pid: [0.0] * len(gws) for pid in pool if pid in self._elements
         }
+        self.last_venue: dict[int, list[float]] = {
+            pid: [0.0] * len(gws) for pid in results
+        }
         for pos in ["GK", "DEF", "MID", "FWD"]:
             mask = df["_pos"] == pos
             if not mask.any():
                 continue
             preds = self._predict_position(pos, df[mask])
-            for (pid, gw), val in zip(
+            for (pid, gw, home), val in zip(
                 [m for m, keep in zip(meta, mask.tolist()) if keep], preds
             ):
-                results[pid][gw - next_gw] += float(val)  # DGW fixtures sum
+                vadj = self._venue_adjustment(pid, home)
+                idx = gw - next_gw
+                results[pid][idx] += float(val) + vadj  # DGW fixtures sum
+                self.last_venue[pid][idx] += vadj
 
         return self._cold_start_blend(results, season_matches)
 
-    # Season matches before the model stands alone. Reduced 5 -> 3 on
-    # 2026-09-01: hindsight-free scoring of GW1+GW2 (scripts/blend_eval.py)
-    # had model-only beating the deployed blend on RMSE both weeks (GW1
-    # 3.64 vs 3.71 played-RMSE; GW2 3.01 vs 3.18) and its GW1 top-10
-    # picks outscoring ep_next's (4.40 vs 3.70 actual), while ep_next
-    # kept a better top-30 rank ordering - so a moderate reduction, not
-    # removal. The blend was also calibrated before the understat
-    # mapping fix, when opponent features were partly NaN. Revisit at
-    # GW8 with more scored weeks.
-    COLD_START_FULL_TRUST = 3
+    # Venue term: the model's trained weights price home advantage at
+    # ~zero while 2025-26 (29,757 hindsight-free player-GW rows,
+    # scripts/fixture_layer_calib.py venue-only fit) measures the real
+    # home-away residual at +0.375 (MID/FWD) and +0.440 (GK/DEF) points
+    # per match. One parameter per group, sign known in advance, applied
+    # to the MODEL output pre-blend (never to ep_next). Falsifiable
+    # expectation recorded in docs/fixture_layer_design.md: it must
+    # improve home-vs-away ordering accuracy over GW3-GW8 or it comes
+    # out, same as DefCon's standing commitment.
+    VENUE_HOME_COEF = {"GKDEF": 0.440, "MIDFWD": 0.375}
+
+    def _venue_adjustment(self, pid: int, home: bool) -> float:
+        et = self._elements.get(pid, {}).get("element_type")
+        group = "GKDEF" if et in (1, 2) else "MIDFWD"
+        half = self.VENUE_HOME_COEF[group] / 2.0
+        return half if home else -half
+
+    def venue_report(self) -> dict[int, list[float]]:
+        """Per-player per-GW venue adjustment (pre-blend) from the most
+        recent project_all call. Multiply by the blend weight for the
+        post-blend contribution."""
+        return getattr(self, "last_venue", {})
+
+    # Season matches before the model stands alone.
+    # 5 -> 3 on 2026-09-01: hindsight-free GW1+GW2 scoring
+    # (scripts/blend_eval.py) had model-only beating the deployed blend
+    # on played-RMSE both weeks (3.64 vs 3.71; 3.01 vs 3.18).
+    # 3 -> 2 on 2026-09-02: ep_next retired at 2+ matches. Verified
+    # corr(ep_next, form) = 0.993 across 357 players - at this point of
+    # the season ep_next IS the form chart (a trailing 2-game points
+    # average), which injected one 23-point haul straight into the
+    # captain ordering. ep's only legitimate remaining job (correcting
+    # the model's constant early-season under-prediction) cannot change
+    # orderings, while its form-chasing demonstrably corrupts them.
+    # Magnitude de-bias is a GW8 decision, as a constant, never via a
+    # form chart. ep_next still covers GW1-2 where the model is blind.
+    COLD_START_FULL_TRUST = 2
 
     def _cold_start_blend(
         self, results: dict[int, list[float]], season_matches: dict[int, int]
@@ -592,6 +625,12 @@ def blend_report() -> dict[int, dict]:
     """Blend split for the most recent module-level project_all call
     (empty when the fallback served or nothing has been projected)."""
     return _default_model.blend_report() if _default_model else {}
+
+
+def venue_report() -> dict[int, list[float]]:
+    """Venue adjustments (pre-blend) for the most recent module-level
+    project_all call; empty when the fallback served."""
+    return _default_model.venue_report() if _default_model else {}
 
 
 def opponent_form(fpl_team_id: int, last: int = 5) -> dict | None:
