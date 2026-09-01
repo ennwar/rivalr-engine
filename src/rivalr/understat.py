@@ -52,6 +52,16 @@ FPL_TO_UNDERSTAT_TEAM = {
     "West Brom": "West Bromwich Albion",
     "Brighton": "Brighton",
     "West Ham": "West Ham",
+    # FPL uses the long form, understat the short one. Found 2026-09-01:
+    # the unmapped names silently resolved to ZERO understat matches, so
+    # every team/opponent feature for these clubs was NaN (promoted clubs
+    # looked like missing data instead of using their real current-season
+    # numbers).
+    "Coventry City": "Coventry",
+    "Hull City": "Hull",
+    "Ipswich Town": "Ipswich",
+    "Luton Town": "Luton",
+    "Leicester City": "Leicester",
 }
 
 

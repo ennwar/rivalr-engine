@@ -611,6 +611,61 @@ export default function Page() {
                   <Flags flags={brief.captain.player.flags} />
                 </div>
                 <div className="why">{brief.captain.reasoning}</div>
+                {(brief.captain as any).close_call && (
+                  <div className="warn" style={{ marginTop: 8 }}>
+                    The call is close: the top two are within 1.0 xPts —
+                    either armband is defensible.
+                  </div>
+                )}
+                {((brief.captain as any).board ?? []).length > 0 && (
+                  <div className="fxwrap" style={{ marginTop: 10 }}>
+                    <table className="fxtable" style={{ fontSize: 12.5 }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: "left" }}>candidate</th>
+                          <th>xPts</th>
+                          <th>fixture</th>
+                          <th>FDR</th>
+                          <th>margin</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {((brief.captain as any).board ?? []).map(
+                          (c: any, i: number) => (
+                            <tr key={c.id}>
+                              <td style={{ textAlign: "left", fontWeight: i === 0 ? 700 : 400 }}>
+                                {c.name}{i === 0 && " (C)"}
+                              </td>
+                              <td className="mono">{c.projection.toFixed(2)}</td>
+                              <td>
+                                {c.fixtures.length
+                                  ? c.fixtures
+                                      .map((f: any) => `${f.opponent} (${f.venue})`)
+                                      .join(", ")
+                                  : "blank"}
+                              </td>
+                              <td className="mono">
+                                {c.fixtures
+                                  .map((f: any) => f.difficulty ?? "?")
+                                  .join(", ") || "—"}
+                              </td>
+                              <td className="mono">
+                                {c.margin_over_next != null
+                                  ? `+${c.margin_over_next.toFixed(2)}`
+                                  : ""}
+                              </td>
+                            </tr>
+                          ),
+                        )}
+                      </tbody>
+                    </table>
+                    <div className="legend">
+                      margin = lead over the next candidate · FDR =
+                      FPL&apos;s 1–5 fixture difficulty for the
+                      candidate&apos;s team
+                    </div>
+                  </div>
+                )}
               </div>
             </section>
           )}

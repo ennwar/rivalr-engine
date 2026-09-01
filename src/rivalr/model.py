@@ -316,6 +316,17 @@ class OpenFPLModel:
             )
             self._us_team_hist = {}
             self._us_player_map = {}
+        if self._us_team_hist:
+            from .understat import FPL_TO_UNDERSTAT_TEAM
+            for t in self._teams:
+                title = FPL_TO_UNDERSTAT_TEAM.get(t["name"], t["name"])
+                if not self._us_team_hist.get(title):
+                    log.error(
+                        "UNDERSTAT TEAM UNMAPPED: FPL '%s' -> '%s' has zero "
+                        "matches - all its team/opponent features will be "
+                        "NaN. Add a FPL_TO_UNDERSTAT_TEAM entry.",
+                        t["name"], title,
+                    )
         self._us_ready = True
 
     def _team_block(self, fpl_team_id: int, scope: str) -> dict[str, float]:

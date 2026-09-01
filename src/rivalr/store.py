@@ -19,7 +19,7 @@ log = logging.getLogger("rivalr.store")
 # changes payload content/shape invalidates stale entries instead of
 # serving pre-fix briefs for up to 6 hours (this happened; bump on any
 # payload-affecting change).
-CACHE_SCHEMA_V = 8  # v8: phantom unplayed-fixture rows removed from minutes/form
+CACHE_SCHEMA_V = 9  # v9: promoted-club understat mapping + captain board
 
 
 def cache_key(team_id: int, league_id: int, mode: str, target: int | None,

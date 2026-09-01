@@ -480,6 +480,46 @@ def build_brief_json(
             "reasoning": reasoning,
         }
 
+        # Captain board: top 5 XI candidates with their fixture context,
+        # so a near-tie is visible instead of hidden behind one name.
+        short = {t["id"]: t["short_name"] for t in bootstrap["teams"]}
+        fx_next = [f for f in client.fixtures() if f.get("event") == gw]
+
+        def _fixture_info(team_id: int) -> list[dict]:
+            out = []
+            for f in fx_next:
+                if f["team_h"] == team_id:
+                    out.append({"opponent": short.get(f["team_a"], "?"),
+                                "venue": "H",
+                                "difficulty": f.get("team_h_difficulty")})
+                elif f["team_a"] == team_id:
+                    out.append({"opponent": short.get(f["team_h"], "?"),
+                                "venue": "A",
+                                "difficulty": f.get("team_a_difficulty")})
+            return out
+
+        ranked = sorted(
+            chosen.get("xi") or [], key=lambda p: -next_gw_proj.get(p, 0.0),
+        )[:5]
+        board = []
+        for i, pid in enumerate(ranked):
+            el = elements.get(pid, {})
+            nxt = next_gw_proj.get(ranked[i + 1], 0.0) if i + 1 < len(ranked) else None
+            board.append({
+                "id": pid,
+                "name": el.get("web_name", f"#{pid}"),
+                "projection": round(next_gw_proj.get(pid, 0.0), 2),
+                "fixtures": _fixture_info(el.get("team")),
+                "margin_over_next": (
+                    round(next_gw_proj.get(pid, 0.0) - nxt, 2)
+                    if nxt is not None else None
+                ),
+            })
+        captain["board"] = board
+        captain["close_call"] = (
+            len(board) >= 2 and (board[0]["margin_over_next"] or 0) < 1.0
+        )
+
     n_lc = sum(1 for t in transfers if "LOW_CONF" in t["flags"])
     if n_lc:
         warnings.append(f"{n_lc} incoming picks rest on LOW_CONF projections")
