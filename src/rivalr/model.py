@@ -504,7 +504,16 @@ class OpenFPLModel:
 
         return self._cold_start_blend(results, season_matches)
 
-    COLD_START_FULL_TRUST = 5  # season matches before the model stands alone
+    # Season matches before the model stands alone. Reduced 5 -> 3 on
+    # 2026-09-01: hindsight-free scoring of GW1+GW2 (scripts/blend_eval.py)
+    # had model-only beating the deployed blend on RMSE both weeks (GW1
+    # 3.64 vs 3.71 played-RMSE; GW2 3.01 vs 3.18) and its GW1 top-10
+    # picks outscoring ep_next's (4.40 vs 3.70 actual), while ep_next
+    # kept a better top-30 rank ordering - so a moderate reduction, not
+    # removal. The blend was also calibrated before the understat
+    # mapping fix, when opponent features were partly NaN. Revisit at
+    # GW8 with more scored weeks.
+    COLD_START_FULL_TRUST = 3
 
     def _cold_start_blend(
         self, results: dict[int, list[float]], season_matches: dict[int, int]
@@ -512,14 +521,24 @@ class OpenFPLModel:
         """Early-season the FPL history features are empty and the model
         under-predicts everyone, so blend with the FPL site's ep_next
         (which carries last-season priors), weighted by matches played:
-        pure ep_next at GW1, pure OpenFPL from ~GW6."""
+        pure ep_next at GW1, pure OpenFPL from ~GW6.
+
+        The per-player split is kept on self.last_blend so the UI can
+        show how much of a displayed number is FPL's ep_next vs the
+        model's own output (raw, pre-minutes/defcon)."""
         blended_players = 0
+        self.last_blend: dict[int, dict] = {}
         for pid, xs in results.items():
             n = season_matches.get(pid, self.COLD_START_FULL_TRUST)
             w = min(n / self.COLD_START_FULL_TRUST, 1.0)
+            ep = float(self._elements[pid].get("ep_next") or 0.0)
+            self.last_blend[pid] = {
+                "model_raw": round(xs[0], 3) if xs else None,
+                "ep_next": ep,
+                "model_weight": round(w, 2),
+            }
             if w >= 1.0:
                 continue
-            ep = float(self._elements[pid].get("ep_next") or 0.0)
             results[pid] = [round(w * x + (1.0 - w) * ep, 3) for x in xs]
             blended_players += 1
         if blended_players:
@@ -528,6 +547,12 @@ class OpenFPLModel:
                 blended_players, self.COLD_START_FULL_TRUST,
             )
         return results
+
+    def blend_report(self) -> dict[int, dict]:
+        """{pid: {model_raw, ep_next, model_weight}} for the most recent
+        project_all call. model_raw is the next-GW OpenFPL output BEFORE
+        blending (and before minutes/defcon adjustments)."""
+        return getattr(self, "last_blend", {})
 
     def project(self, player_id: int, horizon: int = 5) -> list[float]:
         return self.project_all(horizon, pool=[player_id]).get(player_id, [])
@@ -561,6 +586,12 @@ def project_all(client: FPLClient, horizon: int = 5) -> dict[int, list[float]]:
     except ImportError as exc:
         log.error("OPENFPL DEPENDENCY MISSING: %s", exc)
         return _fallback_projections(client, horizon)
+
+
+def blend_report() -> dict[int, dict]:
+    """Blend split for the most recent module-level project_all call
+    (empty when the fallback served or nothing has been projected)."""
+    return _default_model.blend_report() if _default_model else {}
 
 
 def project(player_id: int, horizon: int) -> list[float]:

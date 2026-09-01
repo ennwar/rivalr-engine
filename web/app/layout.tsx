@@ -22,6 +22,7 @@ export default function RootLayout({
       <body>
         <nav className="topnav">
           <a href="/">brief</a>
+          <a href="/ask">ask</a>
           <a href="/fixtures">fixtures</a>
           <a href="/planner">planner</a>
           <a href="/model">vs model</a>

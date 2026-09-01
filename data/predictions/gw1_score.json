@@ -1,0 +1,133 @@
+{
+  "gw": 1,
+  "ledger_file": "gw1.json",
+  "ledger_partial": false,
+  "scored_at": "2026-08-25T14:52:43.559759+00:00",
+  "unprojected_players": 39,
+  "unrostered_at_snapshot": {
+    "n": 2,
+    "total_points_missed": 2,
+    "players": [
+      {
+        "id": 605,
+        "name": "Yalcouy\u00e9",
+        "points": 1
+      },
+      {
+        "id": 608,
+        "name": "Jebbison",
+        "points": 1
+      }
+    ]
+  },
+  "accuracy": {
+    "Zeros": {
+      "n": 253,
+      "rmse": 0.921,
+      "mae": 0.743
+    },
+    "Blanks": {
+      "n": 200,
+      "rmse": 0.806,
+      "mae": 0.608
+    },
+    "Tickers": {
+      "n": 35,
+      "rmse": 1.981,
+      "mae": 1.839
+    },
+    "Haulers": {
+      "n": 73,
+      "rmse": 7.211,
+      "mae": 6.569
+    },
+    "All": {
+      "n": 561,
+      "rmse": 2.761,
+      "mae": 1.522
+    }
+  },
+  "accuracy_legacy": {
+    "Zeros": {
+      "n": 268,
+      "rmse": 0.966,
+      "mae": 0.784
+    },
+    "Blanks": {
+      "n": 209,
+      "rmse": 0.861,
+      "mae": 0.646
+    },
+    "Tickers": {
+      "n": 62,
+      "rmse": 5.099,
+      "mae": 4.828
+    },
+    "Haulers": {
+      "n": 19,
+      "rmse": 10.862,
+      "mae": 10.597
+    },
+    "All": {
+      "n": 561,
+      "rmse": 2.761,
+      "mae": 1.522
+    }
+  },
+  "accuracy_base": {
+    "Zeros": {
+      "n": 253,
+      "rmse": 0.812,
+      "mae": 0.659
+    },
+    "Blanks": {
+      "n": 200,
+      "rmse": 0.744,
+      "mae": 0.567
+    },
+    "Tickers": {
+      "n": 35,
+      "rmse": 2.121,
+      "mae": 2.021
+    },
+    "Haulers": {
+      "n": 73,
+      "rmse": 7.383,
+      "mae": 6.774
+    },
+    "All": {
+      "n": 561,
+      "rmse": 2.805,
+      "mae": 1.507
+    }
+  },
+  "counterfactual": {
+    "recommended": {
+      "in": [
+        1,
+        229,
+        200,
+        498,
+        356,
+        4,
+        338,
+        13,
+        481,
+        426,
+        106,
+        497,
+        159,
+        169,
+        321
+      ],
+      "out": [],
+      "points_delta": 41
+    },
+    "actual": {
+      "in": [],
+      "out": [],
+      "points_delta": 0
+    },
+    "recommendation_edge": 41
+  }
+}

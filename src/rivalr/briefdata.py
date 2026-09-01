@@ -501,10 +501,12 @@ def build_brief_json(
         ranked = sorted(
             chosen.get("xi") or [], key=lambda p: -next_gw_proj.get(p, 0.0),
         )[:5]
+        blend_info = model.blend_report()
         board = []
         for i, pid in enumerate(ranked):
             el = elements.get(pid, {})
             nxt = next_gw_proj.get(ranked[i + 1], 0.0) if i + 1 < len(ranked) else None
+            bi = blend_info.get(pid)
             board.append({
                 "id": pid,
                 "name": el.get("web_name", f"#{pid}"),
@@ -514,6 +516,13 @@ def build_brief_json(
                     round(next_gw_proj.get(pid, 0.0) - nxt, 2)
                     if nxt is not None else None
                 ),
+                # How much of the raw number is the model's own output vs
+                # FPL's ep_next. If it's mostly FPL's, the user sees that.
+                "blend": ({
+                    "model_raw": bi["model_raw"],
+                    "ep_next": bi["ep_next"],
+                    "model_weight": bi["model_weight"],
+                } if bi and bi.get("model_raw") is not None else None),
             })
         captain["board"] = board
         captain["close_call"] = (

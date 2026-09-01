@@ -446,27 +446,42 @@ def ask_usage():
 def ask(
     team_id: int = Query(...),
     league_id: int = Query(...),
-    qid: str = Query(..., max_length=24),
+    qid: str | None = Query(None, max_length=24),
+    text: str | None = Query(None, max_length=300),
 ):
     """Grounded assistant answer. Same job/poll pattern as /brief for
-    slow questions (simulation); cached like everything else."""
+    slow questions (simulation); cached like everything else. Pass a
+    registry qid OR free `text` - free text goes through the same
+    grounding contract (LLM sees engine JSON only, never invents)."""
+    import hashlib
+
     from . import assistant
 
-    if qid not in assistant.QUESTIONS:
-        raise HTTPException(422, "unknown question id")
+    if not qid and not (text and text.strip()):
+        raise HTTPException(422, "pass qid or text")
     _gc_jobs()
     client = client_factory()
     gw, deadline = _gw_and_deadline(client)
-    key = cache_key(team_id, league_id, f"ask:{qid}", None, gw)
+    if qid:
+        if qid not in assistant.QUESTIONS:
+            raise HTTPException(422, "unknown question id")
+        key = cache_key(team_id, league_id, f"ask:{qid}", None, gw)
+        kwargs = dict(team_id=team_id, league_id=league_id, qid=qid)
+
+        def builder(c, **kw):
+            return assistant.answer(c, usage_store=cache, **kw)
+    else:
+        norm = " ".join(text.split()).lower()
+        h = hashlib.sha1(norm.encode("utf-8")).hexdigest()[:12]
+        key = cache_key(team_id, league_id, f"ask:free:{h}", None, gw)
+        kwargs = dict(team_id=team_id, league_id=league_id, text=text)
+
+        def builder(c, **kw):
+            return assistant.answer_free(c, usage_store=cache, **kw)
 
     cached = cache.get(key, max_age_s=SERVE_TTL_S)
     if cached is not None:
         return {"cached": True, **cached}
-
-    kwargs = dict(team_id=team_id, league_id=league_id, qid=qid)
-
-    def builder(c, **kw):
-        return assistant.answer(c, usage_store=cache, **kw)
 
     with _jobs_lock:
         jid = _jobs_by_key.get(key)
