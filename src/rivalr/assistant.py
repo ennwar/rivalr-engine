@@ -26,7 +26,7 @@ from .store import cache_key, make_store
 
 log = logging.getLogger("rivalr.assistant")
 
-LLM_MODEL = "claude-haiku-4-5-20251001"
+LLM_MODEL = "claude-haiku-4-5"  # $1/M in, $5/M out - /ask/usage estimates at these rates
 
 SYSTEM_PROMPT = (
     "You translate the JSON output of a Fantasy Premier League "
