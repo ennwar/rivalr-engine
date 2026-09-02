@@ -130,8 +130,10 @@ def _run_job(jid: str, key: tuple, kwargs: dict, builder=None) -> None:
             )
     except Exception as exc:
         log.exception("brief job failed")
+        from . import briefdata as _bd
+        msg = str(exc) if isinstance(exc, _bd.LeagueMismatch) else repr(exc)
         with _jobs_lock:
-            _jobs[jid].update(status="failed", error=repr(exc))
+            _jobs[jid].update(status="failed", error=msg)
 
 
 # -- helpers ---------------------------------------------------------------
@@ -868,6 +870,12 @@ def myleagues(team_id: int = Query(...)):
             "entry_rank": lg.get("entry_rank"),
             "entry_last_rank": lg.get("entry_last_rank"),
         })
+    # Most intimate league first: giant public "mini-leagues" (YouTuber
+    # leagues etc.) are league_type x too, and auto-selecting one broke
+    # rival analysis (team ranked 43,886 -> not on standings page 1).
+    # Sorting by the user's own rank puts their real mini-leagues on
+    # top; rank 0/None means unranked-yet, sorted last.
+    leagues.sort(key=lambda l: l["entry_rank"] if l.get("entry_rank") else 10**9)
     return {
         "team_id": team_id,
         "team_name": entry.get("name", ""),

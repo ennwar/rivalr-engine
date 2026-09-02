@@ -48,6 +48,40 @@ def _player(
     }
 
 
+class LeagueMismatch(ValueError):
+    """Team queried against a league it can't be analysed in. The
+    message is written for the end user and shown verbatim."""
+
+
+def validate_pair(client: FPLClient, team_id: int, league_id: int) -> None:
+    """A team must never be solved against a league it is not in, and a
+    giant public league (user ranked beyond standings page 1) cannot
+    feed rival analysis. Fails FAST - before any projection work - with
+    a plain-English message instead of a raw ValueError minutes later.
+    A failed membership LOOKUP (network etc.) does not block."""
+    try:
+        my_leagues = {
+            lg["id"]: lg
+            for lg in client.entry(team_id).get("leagues", {}).get("classic", [])
+        }
+    except Exception:
+        log.warning("league membership check failed - proceeding", exc_info=True)
+        return
+    mine = my_leagues.get(league_id)
+    if mine is None:
+        raise LeagueMismatch(
+            f"Team {team_id} is not in league {league_id} - pick one of "
+            "this team's own leagues from the dropdown."
+        )
+    if (mine.get("entry_rank") or 0) > 50:
+        raise LeagueMismatch(
+            f"'{mine.get('name', league_id)}' has this team ranked "
+            f"{mine.get('entry_rank'):,} - it's a big public league, and "
+            "rivalr's rival analysis is built for small mini-leagues "
+            "(standings load the top 50). Pick a smaller league."
+        )
+
+
 def build_for_mode(
     client: FPLClient, team_id: int, league_id: int, mode: str,
     target: int | None = None,
@@ -88,6 +122,8 @@ def build_plan_json(
     elements = {el["id"]: el for el in bootstrap["elements"]}
     teams = {t["id"]: t["name"] for t in bootstrap["teams"]}
     gw = client.next_gw()
+
+    validate_pair(client, team_id, league_id)
 
     # Mid-gameweek context: the plan starts at the NEXT deadline, but if
     # the previous GW is still being played the UI must say so, and mark
@@ -248,6 +284,8 @@ def build_brief_json(
     deadline = next(
         ev["deadline_time"] for ev in bootstrap["events"] if ev["id"] == gw
     )
+
+    validate_pair(client, team_id, league_id)
 
     # Mid-gameweek awareness: if the previous GW is still being played,
     # say so, and know which teams have not yet kicked off.
