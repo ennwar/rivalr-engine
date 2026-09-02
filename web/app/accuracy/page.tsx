@@ -282,6 +282,26 @@ export default function AccuracyPage() {
             <h2>Where we were wrong, and what we changed</h2>
             <div className="transfer">
               <div className="line" style={{ fontWeight: 600 }}>
+                We added a capped early-season form credit (GW3, 2026-09-02)
+              </div>
+              <div className="swings" style={{ marginTop: 6 }}>
+                Retiring ep_next (below) fixed fluke-chasing but left the
+                model blind to real current-season form for the first few
+                gameweeks, because its form windows still lean on last
+                season this early — so it favoured unproven season-openers
+                over proven in-form players like João Pedro. We now add a
+                small, hard-capped (±1.0) credit built on{" "}
+                <b>non-penalty</b> xG and xA — real underlying, not points,
+                so a penalty-assisted haul earns little while two genuinely
+                high-xG games earn credit. It only applies under 5
+                matches, phases out after, and a dead-band leaves
+                established players (Haaland) untouched. Logged as its own
+                ledger layer with a GW3–GW8 removal test: it must improve
+                accuracy and ordering, or it comes out.
+              </div>
+            </div>
+            <div className="transfer">
+              <div className="line" style={{ fontWeight: 600 }}>
                 We retired FPL&apos;s ep_next from projections (GW3, 2026-09-02)
               </div>
               <div className="swings" style={{ marginTop: 6 }}>

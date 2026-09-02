@@ -316,9 +316,33 @@ def take_snapshot(
         failures.append(f"venue layer attribution: {exc!r}")
         venue_final = {}
 
+    # Fifth layer: early-season form credit's contribution to the FINAL
+    # number (the model-side credit x minutes factor; blend weight is 1.0
+    # while it is active, since ep_next is retired at 2+ matches). "base"
+    # excludes it too, so scoring can ask whether it earned its place.
+    form_final: dict[int, list[float]] = {}
+    try:
+        fr = model.form_report()
+        for pid, credits in fr.items():
+            if pid not in base:
+                continue
+            f = est[pid].factor if pid in est else 1.0
+            form_final[pid] = [round(cr * f, 3) for cr in credits]
+        base = {
+            pid: [
+                round(x - (form_final.get(pid) or [0.0] * len(xs))[i], 3)
+                for i, x in enumerate(xs)
+            ]
+            for pid, xs in base.items()
+        }
+    except Exception as exc:
+        failures.append(f"form layer attribution: {exc!r}")
+        form_final = {}
+
     path = ledger.record_predictions(
         gw, coverage, recommendation, partial=partial, failures=failures,
-        layers={"base": base, "venue": venue_final, "defcon": dc_corr},
+        layers={"base": base, "form": form_final, "venue": venue_final,
+                "defcon": dc_corr},
         availability=availability,
     )
     return path, partial, failures

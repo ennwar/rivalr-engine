@@ -508,7 +508,85 @@ class OpenFPLModel:
                 results[pid][idx] += float(val) + vadj  # DGW fixtures sum
                 self.last_venue[pid][idx] += vadj
 
-        return self._cold_start_blend(results, season_matches)
+        blended = self._cold_start_blend(results, season_matches)
+        return self._apply_form_credit(blended, next_gw, gws)
+
+    # -- early-season form credit ------------------------------------------
+    # Retiring ep_next (2026-09-02) left the model blind to current-season
+    # form for ~5 GWs, because OpenFPL's form windows still lean on last
+    # season this early - it favoured unproven season-openers over proven
+    # in-form players (Joao Pedro, Tzolis). This restores a SMALL, capped
+    # slice of current-season form WITHOUT ep_next's fluke-chasing:
+    #   - non-penalty xG + xA per 90 (real underlying, not points), so a
+    #     penalty-assisted haul on low npxG (the Bruno case) earns little
+    #     while two genuinely high-npxG games (Joao Pedro) earn credit
+    #   - a dead-band trusts the model within a bonus/conversion allowance
+    #     of the xG-implied floor, so an established elite performing to
+    #     expectation (Haaland) is NOT dinged
+    #   - hard cap +/-1.0 per GW: no single haul can swing a captaincy
+    #   - only while < 5 current-season matches; phases to zero by match 5
+    # Falsifiable expectation (docs/fixture_layer_design.md), scored at
+    # GW8: improves played-RMSE and ordering for < 5-match players over
+    # GW3-GW8, without resurrecting fluke-chasing, or it comes out.
+    FORM_APPEAR = 2.0
+    FORM_GOAL_PTS = {1: 6, 2: 6, 3: 5, 4: 4}
+    FORM_ASSIST = 3.0
+    FORM_CAP = 1.0
+    FORM_FORGIVE = 2.0          # bonus/conversion the raw-xG floor can't see
+    FORM_FULL_TRUST = 5         # current-season matches before credit is 0
+    FORM_SEASON_START = "-08-01"
+
+    def _current_us_form(self, pid: int) -> tuple[int, float, float]:
+        """(current-season understat matches, npxG/90, xA/90). Empty when
+        the player has no understat mapping or no current-season match."""
+        uid = self._us_player_map.get(pid)
+        if not uid:
+            return 0, 0.0, 0.0
+        season = str(self.understat.season)
+        cutoff = season + self.FORM_SEASON_START
+        cur = [m for m in (self.understat.player_matches(uid) or [])
+               if str(m.get("date", "")) >= cutoff]
+        mins = sum(float(m["time"]) for m in cur)
+        if not cur or mins <= 0:
+            return len(cur), 0.0, 0.0
+        npxg90 = sum(float(m.get("npxG") or 0.0) for m in cur) / mins * 90.0
+        xa90 = sum(float(m.get("xA") or 0.0) for m in cur) / mins * 90.0
+        return len(cur), npxg90, xa90
+
+    def _apply_form_credit(
+        self, proj: dict[int, list[float]], next_gw: int, gws: list[int],
+    ) -> dict[int, list[float]]:
+        self.last_form: dict[int, list[float]] = {
+            pid: [0.0] * len(gws) for pid in proj
+        }
+        for pid, xs in proj.items():
+            el = self._elements.get(pid)
+            if el is None:
+                continue
+            m, npxg90, xa90 = self._current_us_form(pid)
+            if m == 0 or m >= self.FORM_FULL_TRUST:
+                continue
+            gp = self.FORM_GOAL_PTS.get(el["element_type"], 4)
+            floor = self.FORM_APPEAR + npxg90 * gp + xa90 * self.FORM_ASSIST
+            for i, model_gw in enumerate(xs):
+                w = max(0.0, (self.FORM_FULL_TRUST - (m + i)) / self.FORM_FULL_TRUST)
+                if w == 0.0:
+                    continue
+                if model_gw < floor:
+                    cr = min(self.FORM_CAP, w * (floor - model_gw))
+                elif model_gw > floor + self.FORM_FORGIVE:
+                    cr = -min(self.FORM_CAP,
+                              w * (model_gw - floor - self.FORM_FORGIVE))
+                else:
+                    cr = 0.0
+                xs[i] = round(model_gw + cr, 3)
+                self.last_form[pid][i] = round(cr, 3)
+        return proj
+
+    def form_report(self) -> dict[int, list[float]]:
+        """Per-player per-GW form credit already folded into the returned
+        projection, for ledger attribution."""
+        return getattr(self, "last_form", {})
 
     # Venue term: the model's trained weights price home advantage at
     # ~zero while 2025-26 (29,757 hindsight-free player-GW rows,
@@ -631,6 +709,12 @@ def venue_report() -> dict[int, list[float]]:
     """Venue adjustments (pre-blend) for the most recent module-level
     project_all call; empty when the fallback served."""
     return _default_model.venue_report() if _default_model else {}
+
+
+def form_report() -> dict[int, list[float]]:
+    """Early-season form credit folded into the most recent module-level
+    project_all output; empty when the fallback served."""
+    return _default_model.form_report() if _default_model else {}
 
 
 def opponent_form(fpl_team_id: int, last: int = 5) -> dict | None:

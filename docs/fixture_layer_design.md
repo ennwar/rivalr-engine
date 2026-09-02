@@ -62,6 +62,52 @@ opponent's actual last-5 defensive record (xGA/match, goals conceded,
 clean sheets) instead of FPL's static FDR - the evidence a
 single-gameweek call should rest on.
 
+## Addendum 2026-09-02b: early-season FORM CREDIT (shipped)
+
+Retiring ep_next left the model blind to current-season form for ~5 GWs
+(OpenFPL's form windows still lean on last season this early), favouring
+unproven season-openers (Gonzalo, Tavernier) over proven in-form players
+(Joao Pedro). Fix: a capped, early-season-only, xG-based form credit
+(model.OpenFPLModel._apply_form_credit). NOT a restore of ep_next.
+
+Design:
+- non-penalty xG/90 + xA/90 over current-season understat matches;
+  floor = 2 + npxG90*goal_pts + xA90*3 (goal_pts GK/DEF 6, MID 5, FWD 4)
+- UP when the model sits below that floor; DOWN when it sits above
+  floor + 2.0 (a bonus/conversion dead-band so an elite performing to
+  expectation, e.g. Haaland, is untouched); symmetric, hard cap +/-1.0
+  per GW so no single game can swing a captaincy
+- only while < 5 current-season matches; phases to zero by match 5,
+  decayed across the horizon by assumed match count
+- non-penalty xG is the key: it separates Joao Pedro (two genuinely
+  high-npxG games) from the Bruno case (one penalty-assisted points
+  haul on modest npxG)
+
+Validation (scripts/form_credit_eval.py + real solver, 2026-09-02):
+- BRUNO CHECK (the fail condition): Bruno 6.26 -> 6.70, Haaland 6.16 ->
+  6.16 (untouched, dead-band). Bruno's lead over Haaland goes +0.10 ->
+  +0.54 - still a sub-1.0 close call, NOT the old ep_next +2.03
+  leapfrog. Haaland gets zero credit because the model already rates
+  him above his xG floor. PASS.
+- Joao Pedro: GW3 3.69 -> 4.69; 5-GW 21.72 -> 24.18 (vs Gonzalo 24.55)
+  - no longer recommended as a sale in the real solve. PASS.
+- Tzolis: ~0 credit. His non-penalty xG/90 is genuinely low (0.17), so
+  the xG-based layer correctly declines to prop him up - if the solver
+  still sells him, it is on real underlying, not form-blindness. This
+  is the anti-fluke design working, disclosed rather than tuned away.
+- GW1/GW2 scoring: the layer is INERT as-of GW1 (0 current-season
+  matches -> 0 credit for everyone, identical to model-only) and thin
+  as-of GW2 (1 match). It cannot be meaningfully scored on the only two
+  settled GWs; its real test is the forward expectation below.
+
+FALSIFIABLE EXPECTATION (recorded before shipping, judged at GW8):
+over GW3-GW8, for players with < 5 current-season matches, the form
+credit improves played-RMSE and top-N ordering vs the model-only
+counterfactual (recoverable from the ledger "form" layer), without the
+GW3 Bruno-vs-Haaland gap ever exceeding +1.0 on npxG alone. If it fails
+either clause, it comes out - same standing commitment as DefCon and
+venue.
+
 ## Addendum 2026-09-02: the VENUE term shipped on its own
 
 Approved separately after the GW3 captain investigation (Bruno-vs-
