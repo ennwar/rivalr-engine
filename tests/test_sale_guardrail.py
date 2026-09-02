@@ -57,6 +57,36 @@ def test_guardrail_serves_locked_resolve_and_warns():
     assert any("kept them instead" in w for w in warnings)
 
 
+def test_in_form_sale_warns_but_never_locks():
+    """The Joao Pedro case: projections legitimately favour the swap,
+    but the outgoing player is hot - warn, don't override the model."""
+    els = {k: dict(v) for k, v in ELS.items()}
+    els[4]["form"] = "10.0"   # in-form cheap player
+    els[5] = {"web_name": "InDef", "element_type": 2, "now_cost": 55,
+              "form": "4.0"}
+    fin = dict(FINAL)
+    fin[4] = [3.5] * 5        # sold for InDef (25 > 17.5: engine fine)
+    fin[5] = [5.0] * 5
+    for i in range(10, 16):   # better DEFs keep player 4 out of top-5
+        els[i] = {"web_name": f"D{i}", "element_type": 2, "now_cost": 50}
+        fin[i] = [6.0] * 5
+    bad = _counterintuitive_sales(els, fin, plan_with([4], [5]), 5)
+    assert len(bad) == 1 and bad[0]["action"] == "warn"
+
+    warnings = []
+    called = {}
+
+    def resolver(ids):
+        called["yes"] = True
+        return None
+
+    out = apply_sale_guardrail(
+        plan_with([4], [5]), els, fin, 5, warnings, resolver)
+    assert "yes" not in called          # no re-solve for form-only
+    assert out["expected_points"] == 100.0
+    assert any("rates short-term form conservatively" in w for w in warnings)
+
+
 def test_guardrail_warns_loudly_when_resolve_fails():
     warnings = []
     out = apply_sale_guardrail(

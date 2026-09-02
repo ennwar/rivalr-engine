@@ -19,7 +19,7 @@ log = logging.getLogger("rivalr.store")
 # changes payload content/shape invalidates stale entries instead of
 # serving pre-fix briefs for up to 6 hours (this happened; bump on any
 # payload-affecting change).
-CACHE_SCHEMA_V = 14  # v14: sale guardrail + plan warnings + clean squad numbers
+CACHE_SCHEMA_V = 15  # v15: transfer driver blocks + form-warn guardrail + causation rules
 
 
 def cache_key(team_id: int, league_id: int, mode: str, target: int | None,

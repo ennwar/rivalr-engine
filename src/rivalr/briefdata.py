@@ -69,6 +69,8 @@ def _counterintuitive_sales(
     }
     hsum = {pid: sum(xs[:horizon]) for pid, xs in final.items() if xs}
 
+    IN_FORM = 7.0  # FPL form (avg pts, last 30d) that a human calls hot
+
     out: list[dict] = []
     for wk in plan.get("weeks", []):
         ins = list(wk.get("transfers_in", []))
@@ -77,8 +79,6 @@ def _counterintuitive_sales(
             if el_out is None:
                 continue
             premium = el_out.get("now_cost", 0) >= 100
-            if not premium and pid_out not in top5:
-                continue
             # same-position incoming replacement (best of them)
             same_pos = [
                 p for p in ins
@@ -87,19 +87,39 @@ def _counterintuitive_sales(
             ]
             in_best = max(same_pos, key=lambda p: hsum.get(p, 0.0),
                           default=None)
-            if in_best is not None and hsum.get(in_best, 0.0) > hsum.get(
+            in_beats = in_best is not None and hsum.get(in_best, 0.0) > hsum.get(
                 pid_out, 0.0
-            ):
-                continue  # replacement clearly beats them: legitimate
-            out.append({
+            )
+            row = {
                 "out_id": pid_out,
                 "out_name": el_out.get("web_name", f"#{pid_out}"),
                 "out_sum": round(hsum.get(pid_out, 0.0), 1),
                 "in_name": (elements.get(in_best, {}) or {}).get(
                     "web_name") if in_best else None,
                 "in_sum": round(hsum.get(in_best, 0.0), 1) if in_best else None,
-                "why": "premium" if premium else "top-5 projected at position",
-            })
+            }
+            if (premium or pid_out in top5) and not in_beats:
+                # projection-based case: the engine's own numbers don't
+                # justify the sale -> hard action (lock + re-solve)
+                out.append({**row, "action": "lock",
+                            "why": "premium" if premium
+                            else "top-5 projected at position"})
+                continue
+            # form-based case: the engine's projections justify the sale,
+            # but the outgoing player is hot by human standards (the
+            # Joao Pedro case). The model discounts short-term form BY
+            # DESIGN, so this is a warning, never an override.
+            try:
+                out_form = float(el_out.get("form") or 0)
+                in_form = float(
+                    (elements.get(in_best, {}) or {}).get("form") or 0
+                ) if in_best else 0.0
+            except (TypeError, ValueError):
+                out_form = in_form = 0.0
+            if out_form >= IN_FORM and out_form > in_form + 2.0:
+                out.append({**row, "action": "warn",
+                            "why": f"in-form (avg {out_form:.1f} pts/gm "
+                                   f"vs incoming's {in_form:.1f})"})
     return out
 
 
@@ -121,13 +141,29 @@ def apply_sale_guardrail(
     bad = _counterintuitive_sales(elements, final, plan, horizon)
     if not bad:
         return plan
+
+    # form-based cases only ever warn: the model discounts short-term
+    # form by design, and overriding it here would smuggle recency bias
+    # back in through the guardrail.
+    for b in (x for x in bad if x["action"] == "warn"):
+        warnings.append(
+            f"heads up: this plan sells {b['out_name']}, who is "
+            f"{b['why']}. The engine's projections still favour the move "
+            f"({b['in_name']} {b['in_sum']} vs {b['out_name']} "
+            f"{b['out_sum']} xPts over the horizon) - it rates short-term "
+            "form conservatively, on purpose. Your call."
+        )
+
+    lock = [x for x in bad if x["action"] == "lock"]
+    if not lock:
+        return plan
     names = ", ".join(
         f"{b['out_name']} ({b['why']}, {b['out_sum']} xPts vs "
         f"{b['in_name'] or 'no like-for-like'} {b['in_sum'] or ''})"
-        for b in bad
+        for b in lock
     )
     try:
-        replacement = resolve_with_locked([b["out_id"] for b in bad])
+        replacement = resolve_with_locked([b["out_id"] for b in lock])
     except Exception:
         log.exception("sanity re-solve failed")
         replacement = None
@@ -639,6 +675,24 @@ def build_brief_json(
                 "hits": chosen.get("hits", 0),
                 "swings": swings,
                 "flags": flags.get(pid_in, []),
+                # The REAL driver of every recommendation, stated so the
+                # assistant never has to guess causation: horizon
+                # projection sums and the price move. Nothing else drives
+                # a points-mode transfer.
+                "driver": {
+                    "out_horizon_sum": (round(proj_sum.get(pid_out, 0.0), 2)
+                                        if pid_out else None),
+                    "in_horizon_sum": round(proj_sum.get(pid_in, 0.0), 2),
+                    "price_freed": (round(
+                        (elements.get(pid_out, {}).get("now_cost", 0)
+                         - elements.get(pid_in, {}).get("now_cost", 0)) / 10.0,
+                        1) if pid_out else None),
+                    "basis": (
+                        "horizon projection sums and budget only; flags are "
+                        "labels that affect no number; per-rival swings are "
+                        "consequences of the move, not reasons for it"
+                    ),
+                },
             })
 
     captain = None

@@ -34,9 +34,19 @@ SYSTEM_PROMPT = (
     "manager.\n"
     "HARD RULES:\n"
     "- Use ONLY numbers, names and facts present in DATA. Never invent, "
-    "estimate, extrapolate or compute new numbers.\n"
-    "- If DATA does not contain what the QUESTION needs, say plainly "
-    "that the engine does not compute that - do not guess.\n"
+    "estimate, extrapolate or compute new numbers (no arithmetic of "
+    "your own - quote DATA's numbers as they are).\n"
+    "- NEVER invent causation. A recommendation's reason is ONLY what a "
+    "'driver'/'reasoning'/'basis' field in DATA states. Flags like "
+    "MGR_CHG, NEW_CLUB and LOW_CONF are informational labels that "
+    "affect NO number - never present a flag as a reason for any "
+    "projection or transfer. Per-rival swing numbers are CONSEQUENCES "
+    "of a move, never its motive - in points mode, rival ownership "
+    "plays no part in recommendations. Opponent form stats shown in "
+    "DATA are display context, not stated drivers.\n"
+    "- If DATA does not contain what the QUESTION needs (including WHY "
+    "something was decided, when no driver field says), say plainly "
+    "that the engine does not expose that - do not guess.\n"
     "- 2-5 sentences, plain language, no headers or bullet lists, "
     "no hedging filler.\n"
     "- Probabilities and projections in DATA were computed by "
@@ -129,10 +139,15 @@ def ctx_gap(client, team_id, league_id) -> dict:
             {"out": (t.get("out") or {}).get("name"),
              "in": t["in"]["name"],
              "net_gain_horizon": t["net_gain"],
+             "driver": t.get("driver"),
              "gap_change_per_rival": t["swings"]}
             for t in b["transfers"]
         ],
-        "note": "positive = the gap to that rival closes/extends in my favour",
+        "note": (
+            "positive = the gap to that rival closes/extends in my favour. "
+            "gap_change_per_rival values are CONSEQUENCES of the move, not "
+            "reasons - the driver field is the only stated reason."
+        ),
     }
 
 
@@ -227,9 +242,14 @@ def ctx_free(client, team_id, league_id) -> dict:
         "recommended_transfers": [
             {"out": (t.get("out") or {}).get("name"),
              "in": t["in"]["name"], "net_gain_horizon": t.get("net_gain"),
+             "driver": t.get("driver"),
              "gap_change_per_rival": t.get("swings"), "flags": t.get("flags")}
             for t in b.get("transfers", [])
         ],
+        "flags_meaning": (
+            "MGR_CHG/NEW_CLUB/LOW_CONF are informational labels only - they "
+            "change no projection and drive no decision"
+        ),
         "my_squad": [
             {"name": p["name"], "club": p["club"], "position": p["position"],
              "next_gw_projection": p["projection"], "flags": p["flags"],
