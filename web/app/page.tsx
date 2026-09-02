@@ -408,6 +408,8 @@ export default function Page() {
               )}
               {brief.rivals.map((r) => {
                 const cw = r.chip_war!;
+                // Three time states, never mixed: Used (history),
+                // Playing now (live GW only), Threat (forecast).
                 return (
                   <div className="transfer" key={r.entry_id}>
                     <div className="line">
@@ -416,44 +418,65 @@ export default function Page() {
                         <span
                           className="chip"
                           style={{ background: "var(--red)", color: "#fff" }}
-                          title="active this gameweek - visible from their live picks before it reaches the history endpoint"
+                          title="live: active in the gameweek being played right now"
                         >
-                          playing {CHIP_LABEL[cw.active_now] ?? cw.active_now} NOW
+                          PLAYING NOW ·{" "}
+                          {CHIP_LABEL[cw.active_now] ?? cw.active_now}
                         </span>
                       )}
-                      <span style={{ marginLeft: "auto" }}>
-                        {cw.first_set_left.map((c) => (
-                          <span key={c} className="chip newclub" title={`${c} still unused from the first set (expires GW${cw.expiry_gw})`}>
-                            {CHIP_LABEL[c] ?? c}
-                          </span>
-                        ))}
-                        {cw.chips_used.map((c) => (
-                          <span
-                            key={`${c.name}${c.event}`}
-                            className="chip"
-                            style={{ textDecoration: "line-through", background: "#20242e", color: "var(--faint)" }}
-                            title={`played ${c.name} in GW${c.event}`}
-                          >
-                            {CHIP_LABEL[c.name] ?? c.name}
-                          </span>
-                        ))}
-                      </span>
+                    </div>
+                    <div className="swings" style={{ marginTop: 6 }}>
+                      <b style={{ color: "var(--faint)" }}>Used</b>{" "}
+                      {cw.chips_used.length
+                        ? cw.chips_used.map((c) => (
+                            <span
+                              key={`${c.name}${c.event}`}
+                              className="chip"
+                              style={{ background: "#20242e", color: "var(--faint)" }}
+                              title={`played in GW${c.event}`}
+                            >
+                              {CHIP_LABEL[c.name] ?? c.name} GW{c.event}
+                            </span>
+                          ))
+                        : "none"}
+                      {cw.first_set_left.length > 0 && (
+                        <>
+                          <b style={{ color: "var(--faint)", marginLeft: 10 }}>
+                            Unused
+                          </b>{" "}
+                          {cw.first_set_left.map((c) => (
+                            <span
+                              key={c}
+                              className="chip newclub"
+                              title={`still unused from the first set (expires GW${cw.expiry_gw})`}
+                            >
+                              {CHIP_LABEL[c] ?? c}
+                            </span>
+                          ))}
+                        </>
+                      )}
                     </div>
                     <div className="swings">
+                      <b style={{ color: "var(--amber)" }}>
+                        Threat (forecast)
+                      </b>{" "}
                       {cw.bench_boost
-                        ? `BB threat: +${cw.bench_boost.swing} best in GW${cw.bench_boost.best_gw}`
-                        : "BB threat: unknown (squad hidden)"}
+                        ? `BB would be worth ~+${cw.bench_boost.swing} at its best in GW${cw.bench_boost.best_gw}`
+                        : "BB: unknown (squad hidden)"}
                       {" · "}
                       {cw.triple_captain
-                        ? `TC threat: +${cw.triple_captain.swing} on ${cw.triple_captain.player} in GW${cw.triple_captain.best_gw}`
-                        : "TC threat: unknown"}
+                        ? `TC ~+${cw.triple_captain.swing} on ${cw.triple_captain.player} in GW${cw.triple_captain.best_gw}`
+                        : "TC: unknown"}
                     </div>
                   </div>
                 );
               })}
               <div className="legend">
-                estimated from each rival&apos;s actual squad and our per-GW
-                projections; doubles are already in the numbers
+                <b>Used</b> = already spent (history) · <b>PLAYING NOW</b> =
+                active in the live gameweek only · <b>Threat</b> = our
+                forecast of what their chip would be worth, from their
+                actual squad and our per-GW projections (doubles already
+                counted) — a prediction, not a fact
               </div>
             </section>
           )}
