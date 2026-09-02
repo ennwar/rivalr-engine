@@ -46,6 +46,7 @@ type Plan = {
   banned: number[];
   free_transfers_now?: number | null;
   total_xp: number | null;
+  warnings?: string[];
   weeks: Week[];
   cached?: boolean;
 };
@@ -241,6 +242,9 @@ export default function Planner() {
               history, banked FTs included).
             </div>
           )}
+          {(plan.warnings ?? []).map((w) => (
+            <div className="warn" key={w}>{w}</div>
+          ))}
 
           {plan.weeks.map((w) => (
             <section key={w.gw}>

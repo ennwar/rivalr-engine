@@ -555,11 +555,15 @@ export default function Page() {
                     <span className="club">{p.club}</span>
                     <Flags flags={p.flags} />
                   </span>
-                  <span className="proj mono">
+                  <span
+                    className="proj mono"
+                    title={
+                      p.defcon >= 0.05
+                        ? `${p.base.toFixed(2)} base + ${p.defcon.toFixed(2)} DefCon`
+                        : undefined
+                    }
+                  >
                     {p.projection.toFixed(2)}
-                    {p.defcon >= 0.1 && (
-                      <span className="def"> (+{p.defcon.toFixed(1)} def)</span>
-                    )}
                   </span>
                 </div>
               ))

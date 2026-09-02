@@ -48,6 +48,108 @@ def _player(
     }
 
 
+def _counterintuitive_sales(
+    elements: dict, final: dict, plan: dict, horizon: int,
+) -> list[dict]:
+    """Sales that fail the human sanity check: the outgoing player is a
+    premium (>= 10.0m) or a top-5 projected player at their position,
+    and the incoming replacement does NOT beat them on projection over
+    the horizon. Flags are display-only and never touch these numbers,
+    so 'raw projection' and 'projection' are the same thing here.
+    (Failure class: the MILP monetising a premium's price into budget
+    for other slots - the Haaland->Gonzalo case.)"""
+    by_pos: dict[int, list] = {}
+    for pid, xs in final.items():
+        el = elements.get(pid)
+        if el and xs:
+            by_pos.setdefault(el["element_type"], []).append((xs[0], pid))
+    top5 = {
+        pid for lst in by_pos.values()
+        for _, pid in sorted(lst, reverse=True)[:5]
+    }
+    hsum = {pid: sum(xs[:horizon]) for pid, xs in final.items() if xs}
+
+    out: list[dict] = []
+    for wk in plan.get("weeks", []):
+        ins = list(wk.get("transfers_in", []))
+        for pid_out in wk.get("transfers_out", []):
+            el_out = elements.get(pid_out)
+            if el_out is None:
+                continue
+            premium = el_out.get("now_cost", 0) >= 100
+            if not premium and pid_out not in top5:
+                continue
+            # same-position incoming replacement (best of them)
+            same_pos = [
+                p for p in ins
+                if elements.get(p, {}).get("element_type")
+                == el_out["element_type"]
+            ]
+            in_best = max(same_pos, key=lambda p: hsum.get(p, 0.0),
+                          default=None)
+            if in_best is not None and hsum.get(in_best, 0.0) > hsum.get(
+                pid_out, 0.0
+            ):
+                continue  # replacement clearly beats them: legitimate
+            out.append({
+                "out_id": pid_out,
+                "out_name": el_out.get("web_name", f"#{pid_out}"),
+                "out_sum": round(hsum.get(pid_out, 0.0), 1),
+                "in_name": (elements.get(in_best, {}) or {}).get(
+                    "web_name") if in_best else None,
+                "in_sum": round(hsum.get(in_best, 0.0), 1) if in_best else None,
+                "why": "premium" if premium else "top-5 projected at position",
+            })
+    return out
+
+
+def apply_sale_guardrail(
+    plan: dict | None,
+    elements: dict,
+    final: dict,
+    horizon: int,
+    warnings: list[str],
+    resolve_with_locked,
+) -> dict | None:
+    """If the optimal plan sells a premium/top-tier player for a
+    replacement that doesn't beat them, re-solve with that player
+    LOCKED and serve the constrained plan, telling the user what it
+    cost. If the re-solve fails, keep the original but raise a loud
+    warning so the sale is never presented as unremarkable."""
+    if not plan:
+        return plan
+    bad = _counterintuitive_sales(elements, final, plan, horizon)
+    if not bad:
+        return plan
+    names = ", ".join(
+        f"{b['out_name']} ({b['why']}, {b['out_sum']} xPts vs "
+        f"{b['in_name'] or 'no like-for-like'} {b['in_sum'] or ''})"
+        for b in bad
+    )
+    try:
+        replacement = resolve_with_locked([b["out_id"] for b in bad])
+    except Exception:
+        log.exception("sanity re-solve failed")
+        replacement = None
+    if replacement:
+        cost = round(
+            (plan.get("expected_points") or 0)
+            - (replacement.get("expected_points") or 0), 1,
+        )
+        warnings.append(
+            f"sanity guardrail: the unconstrained optimum sold {names} - "
+            f"kept them instead (costs {cost} xPts over the horizon; that "
+            "gap is budget redistribution, not the player being bad)"
+        )
+        return replacement
+    warnings.append(
+        f"SANITY CHECK: this plan sells {names} without a replacement that "
+        "beats them on projection - usually the solver monetising their "
+        "price. Review before acting."
+    )
+    return plan
+
+
 class LeagueMismatch(ValueError):
     """Team queried against a league it can't be analysed in. The
     message is written for the end user and shown verbatim."""
@@ -180,6 +282,30 @@ def build_plan_json(
             "(e.g. too many locked players for the budget or formation)"
         )
 
+    plan_warnings: list[str] = []
+
+    def _resolve_locked(extra_locked: list[int]):
+        redo = optimise.solve_all_modes(
+            client=client,
+            team_id=team_id,
+            projections=final,
+            rivals_report=stub_rep,
+            target_id=None,
+            horizon=horizon,
+            xmins={pid: e.expected_minutes for pid, e in est.items()},
+            solver_options={
+                "locked": list(set((locked or []) + extra_locked)),
+                "banned": banned or [],
+                "weekly_hit_limit": 2 if allow_hits else 0,
+                "hit_limit": None if allow_hits else 0,
+            },
+        )
+        return redo.get("points")
+
+    plan = apply_sale_guardrail(
+        plan, elements, final, horizon, plan_warnings, _resolve_locked,
+    )
+
     # Pre-deadline projections for the in-progress gameweek, so a sale of
     # a still-to-play player can show what his remaining fixture is worth
     # (points that accrue to the owner regardless of the sale).
@@ -262,6 +388,7 @@ def build_plan_json(
         "allow_hits": allow_hits,
         "free_transfers_now": ft_now,
         "total_xp": plan.get("expected_points"),
+        "warnings": plan_warnings,
         "weeks": weeks,
     }
 
@@ -442,6 +569,25 @@ def build_brief_json(
     chosen = plans.get(mode) or plans.get("points")
     if chosen is None:
         warnings.append("solver failed for all modes; no transfer plan")
+
+    def _resolve_locked_brief(extra_locked: list[int]):
+        redo = optimise.solve_all_modes(
+            client=client,
+            team_id=team_id,
+            projections=final,
+            rivals_report=rep,
+            target_id=target_id,
+            horizon=horizon,
+            xmins={pid: e.expected_minutes for pid, e in est.items()},
+            requested_mode=mode,
+            solver_options={"weekly_hit_limit": 0, "hit_limit": 0,
+                            "locked": extra_locked},
+        )
+        return redo.get(mode) or redo.get("points")
+
+    chosen = apply_sale_guardrail(
+        chosen, elements, final, horizon, warnings, _resolve_locked_brief,
+    )
 
     # -- assemble ----------------------------------------------------------
     squad = [
