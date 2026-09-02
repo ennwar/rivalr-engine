@@ -333,6 +333,50 @@ def plan(
     return JSONResponse({"job_id": jid, "status": "pending"}, status_code=202)
 
 
+@app.get("/trajectory")
+def trajectory(team_id: int = Query(...),
+               league_id: int | None = Query(None)):
+    """5-week cumulative points trajectory, me vs each rival, under the
+    three transfer scenarios. Heavy (a solver run per team), so it uses
+    the same job/poll + cache pattern as /brief. Rival-optimal paths only
+    appear for small leagues where squads are visible."""
+    from . import trajectory as _traj
+
+    _gc_jobs()
+    client = client_factory()
+    gw, _ = _gw_and_deadline(client)
+    key = cache_key(team_id, league_id or 0, "trajectory", None, gw)
+
+    cached = cache.get(key, max_age_s=SERVE_TTL_S)
+    if cached is not None:
+        return {"cached": True, **cached}
+
+    kwargs = dict(team_id=team_id, league_id=league_id)
+
+    def builder(c, **kw):
+        return _traj.build_trajectory_json(c, **kw)
+
+    with _jobs_lock:
+        jid = _jobs_by_key.get(key)
+        job = _jobs.get(jid) if jid else None
+        if job is None or job["status"] not in ("queued", "running"):
+            jid = uuid.uuid4().hex
+            _jobs[jid] = {"status": "queued", "created": time.time(), "key": key}
+            _jobs_by_key[key] = jid
+            _executor.submit(_run_job, jid, key, kwargs, builder)
+
+    deadline_t = time.time() + SYNC_WAIT_S
+    while time.time() < deadline_t:
+        with _jobs_lock:
+            status = _jobs[jid]["status"]
+            if status == "done":
+                return _jobs[jid]["result"]
+            if status == "failed":
+                raise HTTPException(500, _jobs[jid].get("error", "trajectory failed"))
+        time.sleep(0.25)
+    return JSONResponse({"job_id": jid, "status": "pending"}, status_code=202)
+
+
 @app.get("/season")
 def season(team_id: int = Query(...),
            league_id: int | None = Query(None)):

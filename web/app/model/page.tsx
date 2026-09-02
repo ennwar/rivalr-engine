@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import LeaguePicker, { usePersistentIds } from "../components/LeaguePicker";
+import Trajectory from "./Trajectory";
 
 const API =
   process.env.NEXT_PUBLIC_API_URL ??
@@ -94,8 +95,10 @@ export default function ModelPage() {
       <main>
         {idForm}
         <div className="notice">
-          No scored gameweeks yet - this page fills in as the season runs.
+          No scored history yet - the season-so-far chart fills in as
+          gameweeks are played. The forward projection works now:
         </div>
+        <Trajectory teamId={teamId} leagueId={leagueId} />
       </main>
     );
 
@@ -152,6 +155,12 @@ export default function ModelPage() {
         manages its own 15 independently, so its points are the same
         whichever league you load here - only the humans it&apos;s compared
         against change.
+      </div>
+
+      <Trajectory teamId={teamId} leagueId={leagueId} />
+
+      <div className="gwbar" style={{ marginTop: 28 }}>
+        <h1 style={{ fontSize: 15 }}>Season so far (actuals)</h1>
       </div>
 
       <div className="chartwrap">

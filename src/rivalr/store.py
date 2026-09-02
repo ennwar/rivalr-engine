@@ -19,7 +19,7 @@ log = logging.getLogger("rivalr.store")
 # changes payload content/shape invalidates stale entries instead of
 # serving pre-fix briefs for up to 6 hours (this happened; bump on any
 # payload-affecting change).
-CACHE_SCHEMA_V = 17  # v17: league optional (core brief for any team; rivals as add-on)
+CACHE_SCHEMA_V = 18  # v18: trajectory endpoint (new view, no payload change to briefs)
 
 
 def cache_key(team_id: int, league_id: int, mode: str, target: int | None,
