@@ -194,6 +194,17 @@ def brief(
     gw, deadline = _gw_and_deadline(client)
     key = cache_key(team_id, league_id, mode, target, gw)
 
+    # Validate BEFORE the cache lookup and pair tracking: a mismatched
+    # pair must never serve a (possibly poisoned) cached payload, never
+    # be recorded for pre-warm, and must fail in seconds with a message
+    # the user can act on.
+    from . import briefdata as _bd
+
+    try:
+        _bd.validate_pair(client, team_id, league_id)
+    except _bd.LeagueMismatch as exc:
+        raise HTTPException(422, str(exc))
+
     # Track the pair so the worker pre-warms it from now on (best-effort).
     try:
         cache.record_pair(team_id, league_id, mode, target)
@@ -291,6 +302,11 @@ def plan(
         + (f":b{','.join(map(str, sorted(banned_ids)))}" if banned_ids else "")
     )
     key = cache_key(team_id, league_id, mode_key, None, gw)
+
+    try:
+        briefdata.validate_pair(client, team_id, league_id)
+    except briefdata.LeagueMismatch as exc:
+        raise HTTPException(422, str(exc))
 
     # Only the unconstrained base plan joins the pre-warm list; ad-hoc
     # lock combinations are solved on demand.
