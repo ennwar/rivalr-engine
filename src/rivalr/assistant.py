@@ -363,15 +363,23 @@ QUESTIONS = {
 }
 
 
+# Questions that need a small league's rival data; dropped when there is
+# no league (or a large one) so the assistant degrades cleanly to the
+# core team questions instead of offering chips that can't be answered.
+RIVAL_QUESTIONS = {"catch", "gap", "prob10"}
+
+
 def chips_for(team_id: int, league_id: int) -> list[dict]:
-    """Contextual chips: ordering depends on gameweek state."""
+    """Contextual chips: ordering depends on gameweek state; rival chips
+    appear only when rival data is available."""
     b = _cached_brief(team_id, league_id)
     state = "pre"
     leader = "the leader"
+    has_rivals = bool(b and b.get("rivals"))
     if b:
         if (b.get("live") or {}).get("in_progress"):
             state = "mid"
-        if b.get("rivals"):
+        if has_rivals:
             leader = _first(max(b["rivals"], key=lambda r: r["points"])["name"])
     order = {
         "pre": ["week", "gap", "captain", "catch", "prob10"],
@@ -380,7 +388,8 @@ def chips_for(team_id: int, league_id: int) -> list[dict]:
     }[state]
     return [
         {"id": qid, "label": QUESTIONS[qid]["label"].format(leader=leader)}
-        for qid in order if state in QUESTIONS[qid]["when"] or True
+        for qid in order
+        if has_rivals or qid not in RIVAL_QUESTIONS
     ]
 
 

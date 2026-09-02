@@ -96,6 +96,8 @@ type Brief = {
   captain: { player: Player; reasoning: string } | null;
   transfers: Transfer[];
   rivals: Rival[] | null;
+  rivals_enabled?: boolean;
+  league_note?: string | null;
   warnings: string[];
   cached?: boolean;
 };
@@ -205,17 +207,25 @@ export default function Page() {
       );
       try {
         const mode = targetOverride ? "chase" : "points";
+        // League is optional: omit the param entirely when empty.
+        const leaguePart = leagueId
+          ? `&league_id=${encodeURIComponent(leagueId)}`
+          : "";
         const q =
           `team_id=${encodeURIComponent(teamId)}` +
-          `&league_id=${encodeURIComponent(leagueId)}&mode=${mode}` +
+          `${leaguePart}&mode=${mode}` +
           (targetOverride ? `&target=${targetOverride}` : "");
         lastQuery.current = q;
 
-        // league (for my rank) in parallel; non-fatal
-        fetch(`${API}/league?league_id=${encodeURIComponent(leagueId)}`)
-          .then((r) => (r.ok ? r.json() : null))
-          .then((d) => run === runId.current && d && setLeague(d.entries))
-          .catch(() => {});
+        // league (for my rank) in parallel; non-fatal, only if a league set
+        if (leagueId) {
+          fetch(`${API}/league?league_id=${encodeURIComponent(leagueId)}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => run === runId.current && d && setLeague(d.entries))
+            .catch(() => {});
+        } else {
+          setLeague(null);
+        }
 
         let r = await fetch(`${API}/brief?${q}`);
         if (r.status === 202) {
@@ -278,7 +288,7 @@ export default function Page() {
           onTeamId={setTeamId}
           onLeagueId={setLeagueId}
         />
-        <button disabled={loading || !teamId || !leagueId}>
+        <button disabled={loading || !teamId}>
           {loading ? "working…" : "get brief"}
         </button>
       </form>
@@ -351,10 +361,17 @@ export default function Page() {
               {brief.cached && <span className="cached">cached ≤1h</span>}
             </h1>
             <span className="countdown mono">{countdown}</span>
-            <span className="rank">
-              {myRank ? `rank ${myRank} in league` : "league unranked (pre-season)"}
-            </span>
+            {brief.rivals_enabled ? (
+              <span className="rank">
+                {myRank ? `rank ${myRank} in league` : "league unranked (pre-season)"}
+              </span>
+            ) : (
+              <span className="rank">team analysis</span>
+            )}
           </div>
+          {brief.league_note && (
+            <div className="notice">{brief.league_note}</div>
+          )}
 
           {brief.live?.in_progress && (
             <div className="warn" style={{ background: "#16233a", borderColor: "var(--accent)", color: "var(--text)" }}>
@@ -482,8 +499,34 @@ export default function Page() {
           )}
 
           <section>
-            <h2>Rivals{target ? " · chasing" : ""}</h2>
-            {brief.rivals === null ? (
+            <h2>
+              {brief.rivals_enabled ? "Rivals" : "The model"}
+              {target ? " · chasing" : ""}
+            </h2>
+            {!brief.rivals_enabled ? (
+              <div className="rivals">
+                {brief.model_team && (
+                  <a href="/model" className="rival" style={{ borderColor: "var(--green)", textDecoration: "none" }}>
+                    <div className="name" style={{ color: "var(--green)" }}>
+                      🤖 {brief.model_team.name}
+                    </div>
+                    <div className="meta">
+                      {brief.model_team.points} pts · rank{" "}
+                      {brief.model_team.rank_in_league} · through GW
+                      {brief.model_team.through_gw}
+                    </div>
+                    <div className="chips">
+                      an autonomous team — tap for squads
+                    </div>
+                  </a>
+                )}
+                <div className="notice" style={{ minWidth: 200 }}>
+                  Add your mini-league above to see how you stack up against
+                  your rivals — their squads, effective ownership, chip
+                  threats, and the &quot;vs each rival&quot; framing.
+                </div>
+              </div>
+            ) : brief.rivals === null ? (
               <div className="notice">
                 Rival intelligence unavailable right now - squad and transfers
                 below are still valid.

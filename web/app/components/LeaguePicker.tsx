@@ -119,6 +119,7 @@ export default function LeaguePicker({
             padding: "10px 12px", borderRadius: 8, fontSize: 15,
           }}
         >
+          <option value="">no league · team analysis only</option>
           {leagues!.map((l) => (
             <option key={l.league_id} value={String(l.league_id)}>
               {l.name}{l.entry_rank != null ? ` (rank ${l.entry_rank})` : ""}
@@ -131,7 +132,7 @@ export default function LeaguePicker({
           value={leagueId}
           onChange={(e) => onLeagueId(e.target.value.trim())}
           inputMode="numeric"
-          placeholder="mini-league ID"
+          placeholder="mini-league ID (optional)"
           aria-label="mini-league ID"
         />
       )}

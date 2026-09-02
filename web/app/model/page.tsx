@@ -43,7 +43,7 @@ export default function ModelPage() {
     setSquadGw(g);
     setSquads(null);
     setSquadsLoading(true);
-    fetch(`${API}/season/squads?team_id=${teamId}&league_id=${leagueId}&gw=${g}`)
+    fetch(`${API}/season/squads?team_id=${teamId}${leagueId ? `&league_id=${leagueId}` : ""}&gw=${g}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setSquads(d))
       .finally(() => setSquadsLoading(false));
@@ -54,7 +54,7 @@ export default function ModelPage() {
     setError(null);
     setSquads(null);
     setSquadGw(null);
-    fetch(`${API}/season?team_id=${teamId}&league_id=${leagueId}`)
+    fetch(`${API}/season?team_id=${teamId}${leagueId ? `&league_id=${leagueId}` : ""}`)
       .then((r) => {
         if (!r.ok) throw new Error(`API ${r.status}`);
         return r.json();

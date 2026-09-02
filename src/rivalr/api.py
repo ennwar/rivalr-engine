@@ -184,7 +184,7 @@ def health():
 @app.get("/brief")
 def brief(
     team_id: int = Query(...),
-    league_id: int = Query(...),
+    league_id: int | None = Query(None),
     mode: str = Query("points", pattern="^(points|chase|defend)$"),
     target: int | None = Query(None),
     notify_chat_id: str | None = Query(None, max_length=32),
@@ -192,22 +192,14 @@ def brief(
     _gc_jobs()
     client = client_factory()
     gw, deadline = _gw_and_deadline(client)
-    key = cache_key(team_id, league_id, mode, target, gw)
-
-    # Validate BEFORE the cache lookup and pair tracking: a mismatched
-    # pair must never serve a (possibly poisoned) cached payload, never
-    # be recorded for pre-warm, and must fail in seconds with a message
-    # the user can act on.
-    from . import briefdata as _bd
-
-    try:
-        _bd.validate_pair(client, team_id, league_id)
-    except _bd.LeagueMismatch as exc:
-        raise HTTPException(422, str(exc))
+    key = cache_key(team_id, league_id or 0, mode, target, gw)
+    # League is OPTIONAL: the core brief serves for any team ID. A league
+    # that's missing, unowned or too large simply turns off the rival
+    # layer inside the builder (soft note) - it never blocks the brief.
 
     # Track the pair so the worker pre-warms it from now on (best-effort).
     try:
-        cache.record_pair(team_id, league_id, mode, target)
+        cache.record_pair(team_id, league_id or 0, mode, target)
     except Exception:
         log.warning("pair tracking failed", exc_info=True)
 
@@ -224,7 +216,7 @@ def brief(
     # A pair with no cache entry EVER is a genuinely-new visitor: the UI
     # gets told honestly that the first solve takes minutes.
     try:
-        first_time = not cache.ever_cached(team_id, league_id)
+        first_time = not cache.ever_cached(team_id, league_id or 0)
     except Exception:
         first_time = False
 
@@ -277,7 +269,7 @@ def brief_status(job_id: str = Query(...)):
 @app.get("/plan")
 def plan(
     team_id: int = Query(...),
-    league_id: int = Query(...),
+    league_id: int | None = Query(None),
     horizon: int = Query(5, ge=1, le=8),
     locked: str = Query("", max_length=200),
     banned: str = Query("", max_length=200),
@@ -301,18 +293,14 @@ def plan(
         + (f":l{','.join(map(str, sorted(locked_ids)))}" if locked_ids else "")
         + (f":b{','.join(map(str, sorted(banned_ids)))}" if banned_ids else "")
     )
-    key = cache_key(team_id, league_id, mode_key, None, gw)
-
-    try:
-        briefdata.validate_pair(client, team_id, league_id)
-    except briefdata.LeagueMismatch as exc:
-        raise HTTPException(422, str(exc))
+    key = cache_key(team_id, league_id or 0, mode_key, None, gw)
+    # The planner is league-independent - it never needs or blocks on one.
 
     # Only the unconstrained base plan joins the pre-warm list; ad-hoc
     # lock combinations are solved on demand.
     if not locked_ids and not banned_ids:
         try:
-            cache.record_pair(team_id, league_id, mode_key, None)
+            cache.record_pair(team_id, league_id or 0, mode_key, None)
         except Exception:
             pass
 
@@ -346,8 +334,11 @@ def plan(
 
 
 @app.get("/season")
-def season(team_id: int = Query(...), league_id: int = Query(...)):
-    """Me vs the model vs the rivals, cumulatively.
+def season(team_id: int = Query(...),
+           league_id: int | None = Query(None)):
+    """Me vs the model vs the rivals, cumulatively. League is OPTIONAL:
+    with no league (or a large one) the chart shows you and the
+    autonomous model team only, no rivals.
 
     'Model' = my actual points plus each scored gameweek's
     recommendation edge (recommended transfers minus my actual ones).
@@ -356,13 +347,30 @@ def season(team_id: int = Query(...), league_id: int = Query(...)):
     payload says so."""
     client = client_factory()
 
-    data = client.league_standings(league_id)
-    rows = data["standings"]["results"] or [
-        {"entry": r["entry"],
-         "player_name": f"{r.get('player_first_name', '')} "
-                        f"{r.get('player_last_name', '')}".strip()}
-        for r in data.get("new_entries", {}).get("results", [])
-    ]
+    rows: list[dict] = []
+    if league_id:
+        try:
+            usable, _ = briefdata.league_usable(client, team_id, league_id)
+        except Exception:
+            usable = False
+        if usable:
+            data = client.league_standings(league_id)
+            rows = data["standings"]["results"] or [
+                {"entry": r["entry"],
+                 "player_name": f"{r.get('player_first_name', '')} "
+                                f"{r.get('player_last_name', '')}".strip()}
+                for r in data.get("new_entries", {}).get("results", [])
+            ]
+    if not any(r["entry"] == team_id for r in rows):
+        # No league (or not usable): still show the user themselves.
+        try:
+            meta = client.entry(team_id)
+            name = (f"{meta.get('player_first_name','')} "
+                    f"{meta.get('player_last_name','')}".strip()
+                    or str(team_id))
+        except Exception:
+            name = str(team_id)
+        rows.append({"entry": team_id, "player_name": name})
 
     edges: dict[int, int] = {}
     try:
@@ -435,11 +443,12 @@ def season(team_id: int = Query(...), league_id: int = Query(...)):
 
 
 @app.get("/ask/questions")
-def ask_questions(team_id: int = Query(...), league_id: int = Query(...)):
+def ask_questions(team_id: int = Query(...),
+                  league_id: int | None = Query(None)):
     """Contextual suggested-question chips (the primary interface)."""
     from . import assistant
 
-    return {"chips": assistant.chips_for(team_id, league_id)}
+    return {"chips": assistant.chips_for(team_id, league_id or 0)}
 
 
 @app.get("/ask/usage")
@@ -463,7 +472,7 @@ def ask_usage():
 @app.get("/ask")
 def ask(
     team_id: int = Query(...),
-    league_id: int = Query(...),
+    league_id: int | None = Query(None),
     qid: str | None = Query(None, max_length=24),
     text: str | None = Query(None, max_length=300),
 ):
@@ -483,16 +492,16 @@ def ask(
     if qid:
         if qid not in assistant.QUESTIONS:
             raise HTTPException(422, "unknown question id")
-        key = cache_key(team_id, league_id, f"ask:{qid}", None, gw)
-        kwargs = dict(team_id=team_id, league_id=league_id, qid=qid)
+        key = cache_key(team_id, league_id or 0, f"ask:{qid}", None, gw)
+        kwargs = dict(team_id=team_id, league_id=league_id or 0, qid=qid)
 
         def builder(c, **kw):
             return assistant.answer(c, usage_store=cache, **kw)
     else:
         norm = " ".join(text.split()).lower()
         h = hashlib.sha1(norm.encode("utf-8")).hexdigest()[:12]
-        key = cache_key(team_id, league_id, f"ask:free:{h}", None, gw)
-        kwargs = dict(team_id=team_id, league_id=league_id, text=text)
+        key = cache_key(team_id, league_id or 0, f"ask:free:{h}", None, gw)
+        kwargs = dict(team_id=team_id, league_id=league_id or 0, text=text)
 
         def builder(c, **kw):
             return assistant.answer_free(c, usage_store=cache, **kw)
@@ -525,13 +534,13 @@ def ask(
 @app.get("/season/squads")
 def season_squads(
     team_id: int = Query(...),
-    league_id: int = Query(...),
+    league_id: int | None = Query(None),
     gw: int = Query(..., ge=1, le=38),
 ):
     """The evidence behind the chart: everyone's actual squad for one
-    gameweek, plus the model's squad (mine with the recommended
-    transfers applied). Budget figures are real (entry history); player
-    prices are CURRENT now_cost, labelled approximate."""
+    gameweek, plus the model's squad. League is OPTIONAL - with none,
+    only my squad and the model's are shown, no rivals. Budget figures
+    are real (entry history); player prices are CURRENT now_cost."""
     client = client_factory()
     bootstrap = client.bootstrap()
     els = {el["id"]: el for el in bootstrap["elements"]}
@@ -542,13 +551,28 @@ def season_squads(
     except Exception:
         live = {}
 
-    data = client.league_standings(league_id)
-    rows = data["standings"]["results"] or [
-        {"entry": r["entry"],
-         "player_name": f"{r.get('player_first_name', '')} "
-                        f"{r.get('player_last_name', '')}".strip()}
-        for r in data.get("new_entries", {}).get("results", [])
-    ]
+    rows: list[dict] = []
+    if league_id:
+        try:
+            usable, _ = briefdata.league_usable(client, team_id, league_id)
+        except Exception:
+            usable = False
+        if usable:
+            data = client.league_standings(league_id)
+            rows = data["standings"]["results"] or [
+                {"entry": r["entry"],
+                 "player_name": f"{r.get('player_first_name', '')} "
+                                f"{r.get('player_last_name', '')}".strip()}
+                for r in data.get("new_entries", {}).get("results", [])
+            ]
+    if not any(r["entry"] == team_id for r in rows):
+        try:
+            meta = client.entry(team_id)
+            nm = (f"{meta.get('player_first_name','')} "
+                  f"{meta.get('player_last_name','')}".strip() or str(team_id))
+        except Exception:
+            nm = str(team_id)
+        rows.append({"entry": team_id, "player_name": nm})
 
     def squad_of(entry_id: int) -> dict | None:
         try:

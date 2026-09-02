@@ -78,7 +78,8 @@ export default function Planner() {
       try {
         const q =
           `team_id=${encodeURIComponent(teamId)}` +
-          `&league_id=${encodeURIComponent(leagueId)}&horizon=${h}` +
+          (leagueId ? `&league_id=${encodeURIComponent(leagueId)}` : "") +
+          `&horizon=${h}` +
           (hitsOn ? `&hits=1` : "") +
           (lockedSet.size ? `&locked=${[...lockedSet].join(",")}` : "") +
           (bannedSet.size ? `&banned=${[...bannedSet].join(",")}` : "");
@@ -177,7 +178,7 @@ export default function Planner() {
         >
           {allowHits ? "hits allowed" : "no hits"}
         </button>
-        <button disabled={loading || !teamId || !leagueId}>
+        <button disabled={loading || !teamId}>
           {loading ? "solving…" : "get plan"}
         </button>
       </form>

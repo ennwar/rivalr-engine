@@ -186,9 +186,49 @@ def apply_sale_guardrail(
     return plan
 
 
+class _CoreOnly(Exception):
+    """Internal control-flow: skip the rival layer, serve the core brief."""
+
+
 class LeagueMismatch(ValueError):
     """Team queried against a league it can't be analysed in. The
     message is written for the end user and shown verbatim."""
+
+
+def league_usable(
+    client: FPLClient, team_id: int, league_id: int | None,
+) -> tuple[bool, str | None]:
+    """Can the RIVAL layer be built for this (team, league)? Returns
+    (usable, soft_note). Never raises and never blocks the core brief -
+    the projections, captain, planner and expected score work for anyone
+    with a team ID; only rival analysis needs a small league the user is
+    actually in. A lookup failure is treated as 'not usable' with no
+    note (the core brief still serves)."""
+    if not league_id:
+        return False, None
+    try:
+        my_leagues = {
+            lg["id"]: lg
+            for lg in client.entry(team_id).get("leagues", {}).get("classic", [])
+        }
+    except Exception:
+        log.warning("league membership check failed - core-only", exc_info=True)
+        return False, None
+    mine = my_leagues.get(league_id)
+    if mine is None:
+        return False, (
+            f"Team {team_id} isn't in league {league_id}, so rival analysis "
+            "is off - here's the full team analysis and plan. Add one of "
+            "your own mini-leagues for the rival layer."
+        )
+    if (mine.get("entry_rank") or 0) > 50:
+        return False, (
+            f"'{mine.get('name', league_id)}' is a big public league "
+            f"(you're {mine.get('entry_rank'):,}), so rival analysis isn't "
+            "available for it - here's your full team analysis and plan. "
+            "Add a small mini-league for the rival layer."
+        )
+    return True, None
 
 
 def validate_pair(client: FPLClient, team_id: int, league_id: int) -> None:
@@ -242,7 +282,7 @@ def build_for_mode(
 def build_plan_json(
     client: FPLClient,
     team_id: int,
-    league_id: int,
+    league_id: int | None = None,
     horizon: int = 5,
     locked: list[int] | None = None,
     banned: list[int] | None = None,
@@ -250,6 +290,9 @@ def build_plan_json(
 ) -> dict:
     """Week-by-week transfer plan (points mode) with lock-in/lock-out
     constraints passed straight to the MILP.
+
+    League-independent: the planner solves from the user's own squad and
+    projections only - it never needs a league, and never blocks on one.
 
     Hits are OPT-IN: by default the solver may not take any -4s. When
     allowed, every hit week carries raw/penalty/net so the cost is never
@@ -260,8 +303,6 @@ def build_plan_json(
     elements = {el["id"]: el for el in bootstrap["elements"]}
     teams = {t["id"]: t["name"] for t in bootstrap["teams"]}
     gw = client.next_gw()
-
-    validate_pair(client, team_id, league_id)
 
     # Mid-gameweek context: the plan starts at the NEXT deadline, but if
     # the previous GW is still being played the UI must say so, and mark
@@ -432,7 +473,7 @@ def build_plan_json(
 def build_brief_json(
     client: FPLClient,
     team_id: int,
-    league_id: int,
+    league_id: int | None = None,
     mode: str = "points",
     target_id: int | None = None,
     horizon: int = 5,
@@ -448,7 +489,10 @@ def build_brief_json(
         ev["deadline_time"] for ev in bootstrap["events"] if ev["id"] == gw
     )
 
-    validate_pair(client, team_id, league_id)
+    # League is OPTIONAL: rival analysis is an add-on, never the entry
+    # requirement. The core brief (squad, captain, plan, expected score)
+    # is served for anyone with a team ID.
+    rivals_on, league_note = league_usable(client, team_id, league_id)
 
     # Mid-gameweek awareness: if the previous GW is still being played,
     # say so, and know which teams have not yet kicked off.
@@ -497,10 +541,17 @@ def build_brief_json(
         log.exception("uncertainty flags failed")
         warnings.append("uncertainty flags unavailable")
 
-    # -- rivals (wrapped: never a 500) ------------------------------------
+    # -- squad: always from entry picks, league-independent ----------------
+    # Use the CURRENT (last-locked) gameweek for picks: next_gw's squad
+    # doesn't exist until the user sets it, so fetching it returns empty.
+    my_state = rivals.fetch_my_state(client, team_id, client.current_gw())
+
+    # -- rivals (optional add-on; wrapped: never a 500) -------------------
     rep = None
     rivals_block = None
     try:
+        if not rivals_on:
+            raise _CoreOnly()
         rep = rivals.build_rivals_report(
             client, team_id, league_id, projections=next_gw_proj
         )
@@ -579,13 +630,21 @@ def build_brief_json(
                     for p in their if labels.get(p) == "SWORD"
                 ],
             })
+    except _CoreOnly:
+        rep = None
+        rivals_block = None
     except Exception as exc:
         log.exception("rivals block failed")
         warnings.append(f"rival intelligence unavailable: {exc!r}")
+        rep = None
+        rivals_block = None
+    if rep is None:
+        # Core-only rep: the user's real squad from entry picks, no rival
+        # analysis. The solver and every downstream section run unchanged.
         rep = {
             "effective_ownership": {}, "classification": {}, "rivals": [],
             "small_league": True, "league_size": 0,
-            "my_squad": [], "my_captain": None,
+            "my_squad": my_state.squad, "my_captain": my_state.captain,
         }
 
     # -- solve -------------------------------------------------------------
@@ -884,5 +943,7 @@ def build_brief_json(
         "captain": captain,
         "transfers": transfers,
         "rivals": rivals_block,
+        "rivals_enabled": rivals_on,
+        "league_note": league_note,
         "warnings": warnings,
     }

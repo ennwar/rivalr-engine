@@ -125,6 +125,28 @@ def fetch_league_entries(client: FPLClient, league_id: int) -> tuple[str, list[d
     return league_name, entries
 
 
+def fetch_my_state(client: FPLClient, team_id: int, gw: int) -> ManagerState:
+    """One manager's full state WITHOUT a league - the entry endpoint
+    carries name and totals, picks carry the squad. Lets the core brief
+    (squad, captain, plan, expected score) work for anyone with a team
+    ID, league or not."""
+    try:
+        meta = client.entry(team_id)
+    except Exception:
+        log.error("could not fetch entry meta for team %s", team_id)
+        meta = {}
+    row = {
+        "entry": team_id,
+        "player_name": f"{meta.get('player_first_name', '')} "
+                       f"{meta.get('player_last_name', '')}".strip()
+                       or str(team_id),
+        "entry_name": meta.get("name", ""),
+        "rank": None,
+        "total": meta.get("summary_overall_points", 0),
+    }
+    return fetch_manager_state(client, row, gw)
+
+
 def fetch_manager_state(client: FPLClient, row: dict, gw: int) -> ManagerState:
     """Full state for one manager: squad, chips, bank, transfer history."""
     entry_id = row["entry"]

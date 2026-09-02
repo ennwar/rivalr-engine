@@ -32,8 +32,8 @@ export default function AskPage() {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!/^\d+$/.test(teamId) || !/^\d+$/.test(leagueId)) return;
-    fetch(`${API}/ask/questions?team_id=${teamId}&league_id=${leagueId}`)
+    if (!/^\d+$/.test(teamId)) return;  // league is optional
+    fetch(`${API}/ask/questions?team_id=${teamId}${leagueId ? `&league_id=${leagueId}` : ""}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => d && setChips(d.chips))
       .catch(() => {});
@@ -49,7 +49,7 @@ export default function AskPage() {
     try {
       let result: any = null;
       const r = await fetch(
-        `${API}/ask?team_id=${teamId}&league_id=${leagueId}&${params}`,
+        `${API}/ask?team_id=${teamId}${leagueId ? `&league_id=${leagueId}` : ""}&${params}`,
       );
       if (r.status === 202) {
         const { job_id } = await r.json();
