@@ -35,10 +35,18 @@ log = logging.getLogger("rivalr.assistant")
 # from project_all / bootstrap / fixtures. Projections are computed once
 # per gameweek by the exact brief pipeline and cached in the store.
 
+# Special Latin letters NFKD does NOT decompose (they are distinct
+# letters, not base+accent). Without these, "Odegaard" never matches
+# web_name "Ødegaard" - the silent-drop bug.
+_LATIN = {"ø": "o", "æ": "ae", "œ": "oe", "ł": "l", "đ": "d", "ð": "d",
+          "þ": "th", "ß": "ss", "ı": "i", "ħ": "h", "ŋ": "n", "ĸ": "k"}
+
+
 def _norm(s: str) -> str:
     s = unicodedata.normalize("NFKD", s or "")
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    return s.lower()
+    s = s.lower()
+    return "".join(_LATIN.get(ch, ch) for ch in s)
 
 
 # Words that are also surnames but almost always mean the English word.
@@ -100,31 +108,99 @@ def _team_index(bootstrap: dict) -> dict[str, int]:
     return idx
 
 
-def _match_players(text: str, bootstrap: dict) -> list[int]:
-    """Player ids named in the question. Matches web_name and surname,
-    accent- and case-insensitively, on word boundaries; skips stopword
-    collisions and requires >=4 chars for a single-token surname."""
-    n = _norm(text)
-    words = set(re.findall(r"[a-z0-9.']+", n))
-    hits: list[int] = []
-    seen: set[int] = set()
+# Capitalised words that are never a player the user is naming, so the
+# unresolved-name detector doesn't flag them.
+_NON_NAMES = {
+    "defcon", "captain", "captaincy", "vice", "fixture", "fixtures",
+    "projection", "projections", "transfer", "transfers", "bench",
+    "boost", "triple", "wildcard", "freehit", "gameweek", "points",
+    "minutes", "start", "starts", "compare", "should", "would", "which",
+    "arsenal", "chelsea", "liverpool", "everton", "brighton", "fulham",
+    "sunderland", "newcastle", "brentford", "bournemouth", "leeds",
+    "wolves", "burnley", "palace", "villa", "spurs", "tottenham",
+    "united", "city", "forest", "hull", "ipswich", "coventry",
+}
+
+
+def _player_tokens(el: dict) -> set[str]:
+    web = _norm(el["web_name"]).replace("-", " ").replace(".", " ")
+    sec = _norm(el.get("second_name", "")).replace("-", " ")
+    return {t for t in (web + " " + sec).split() if len(t) >= 3}
+
+
+def resolve_players(text: str, bootstrap: dict) -> dict:
+    """Resolve player names in a question to ids, robustly.
+
+    Returns {resolved: [pid], ambiguous: {term: [pid,...]}, unresolved:
+    [name]}. Handles accents/special letters (Ødegaard), hyphenated and
+    multi-part surnames, web-name vs full-name, and dotted short forms
+    (N.Williams); lists candidates when a surname is ambiguous rather
+    than guessing; and flags name-like words it could NOT resolve so the
+    caller never silently drops a player the user named."""
+    # punctuation (commas, brackets...) -> spaces so "Gakpo," still
+    # matches; keep '.' and ''' for dotted/apostrophe web-names.
+    nt = " " + re.sub(r"[^\w.'\s]", " ", _norm(text)).replace("-", " ") + " "
+    term_hits: dict[str, set[int]] = {}
     for el in bootstrap["elements"]:
         pid = el["id"]
-        web = _norm(el["web_name"])
-        surname = _norm(el["second_name"]).split()[-1] if el.get("second_name") else ""
-        full = _norm(f"{el.get('first_name','')} {el.get('second_name','')}")
-        matched = False
-        if web and web in n and web not in _STOPWORDS:
-            matched = True
-        elif surname and len(surname) >= 4 and surname in words \
-                and surname not in _STOPWORDS:
-            matched = True
-        elif full and len(full) > 6 and full in n:
-            matched = True
-        if matched and pid not in seen:
-            seen.add(pid)
-            hits.append(pid)
-    return hits[:15]
+        web = _norm(el["web_name"]).replace("-", " ")
+        sec = _norm(el.get("second_name", "")).replace("-", " ")
+        first = _norm(el.get("first_name", ""))
+        surname = sec.split()[-1] if sec else ""
+        full = f"{first} {sec}".strip()
+        term = None
+        if full and len(full) > 6 and f" {full} " in nt:
+            term = full                                   # full name (strongest)
+        elif web and web not in _STOPWORDS and f" {web} " in nt:
+            term = web                                    # web_name (unique-ish)
+        elif sec and " " in sec and f" {sec} " in nt:
+            term = sec                                    # multi-word surname
+        elif surname and len(surname) >= 4 and surname not in _STOPWORDS \
+                and f" {surname} " in nt:
+            term = surname                                # single surname
+        if term:
+            term_hits.setdefault(term, set()).add(pid)
+
+    resolved: list[int] = []
+    ambiguous: dict[str, list[int]] = {}
+    for term, pids in term_hits.items():
+        if len(pids) == 1:
+            resolved.append(next(iter(pids)))
+        else:
+            ambiguous[term] = sorted(pids)
+    resolved = list(dict.fromkeys(resolved))[:15]
+
+    # unresolved: capitalised, non-initial, name-like words we matched to
+    # nothing - so a genuinely unknown/typo'd name is reported, not dropped.
+    matched_tokens: set[str] = set()
+    for pid in resolved:
+        el = next((e for e in bootstrap["elements"] if e["id"] == pid), None)
+        if el:
+            matched_tokens |= _player_tokens(el)
+    for term in ambiguous:
+        matched_tokens |= set(term.split())
+    team_norms = set(_team_index(bootstrap))
+    words = re.findall(r"\S+", text)
+    unresolved: list[str] = []
+    for i, w in enumerate(words):
+        core = w.strip(".,!?;:'\"()")
+        if len(core) < 4 or not core[:1].isupper() or i == 0:
+            continue
+        wn = _norm(core).replace("-", " ").replace(".", " ")
+        toks = set(wn.split())
+        if (toks & matched_tokens or wn in _STOPWORDS or wn in _NON_NAMES
+                or wn in team_norms or any(t in team_norms for t in toks)
+                or any(t in _NON_NAMES for t in toks)):
+            continue
+        if core not in unresolved:
+            unresolved.append(core)
+    return {"resolved": resolved, "ambiguous": ambiguous,
+            "unresolved": unresolved[:8]}
+
+
+def _match_players(text: str, bootstrap: dict) -> list[int]:
+    """Back-compat thin wrapper: just the confidently-resolved ids."""
+    return resolve_players(text, bootstrap)["resolved"]
 
 
 def _fixture_outlook(client: FPLClient, team_id: int, from_gw: int,
@@ -148,14 +224,17 @@ def _fixture_outlook(client: FPLClient, team_id: int, from_gw: int,
 
 def _player_card(client: FPLClient, pid: int, bootstrap: dict,
                  projmap: dict[int, list[float]], gw: int,
-                 tn: dict[int, str]) -> dict:
+                 tn: dict[int, str], est_map: dict | None = None,
+                 dc_map: dict | None = None, dc_model=None) -> dict:
     el = next((e for e in bootstrap["elements"] if e["id"] == pid), None)
     if el is None:
         return {"id": pid, "unavailable": True}
     proj = projmap.get(pid) or []
     pos = {1: "GK", 2: "DEF", 3: "MID", 4: "FWD"}.get(el["element_type"], "?")
     fixtures = _fixture_outlook(client, el["team"], gw, tn, n=3)
-    return {
+    thin = int(el.get("minutes") or 0) < 180  # < ~2 full matches this season
+
+    card = {
         "name": el["web_name"],
         "club": tn.get(el["team"], "?"),
         "position": pos,
@@ -167,7 +246,39 @@ def _player_card(client: FPLClient, pid: int, bootstrap: dict,
         "next_gw_projection": round(proj[0], 2) if proj else None,
         "next5_projection_sum": round(sum(proj[:5]), 2) if proj else None,
         "fixtures_next3": fixtures,
+        "thin_data": thin,
     }
+
+    # -- expected minutes (the "will he play" numbers) --------------------
+    e = (est_map or {}).get(pid)
+    if e is not None:
+        card["minutes"] = {
+            "p_start": e.p_start,
+            "expected_minutes": e.expected_minutes,
+            "p60_plus": round(defcon.p60_from_minutes(e), 2),
+            "minutes_multiplier_on_projection": e.factor,
+            "risk_flags": e.flags,
+        }
+
+    # -- DefCon (defensive-contribution points + underlying rate) --------
+    if pos in ("DEF", "MID", "FWD"):
+        grp = defcon.GROUP[pos]
+        block = {
+            "metric": "CBIT" if pos == "DEF" else "CBIRT",
+            "threshold": defcon.GROUP_THRESHOLD[grp],
+            "expected_points_next_gw":
+                round((dc_map or {}).get(pid, [0.0])[0], 2)
+                if dc_map else None,
+        }
+        if dc_model is not None:
+            try:
+                rate90, mins_avg = dc_model.blended_rate(el, pos)
+                block["rate_per90"] = round(rate90, 2)
+                block["is_prior_blended_thin"] = thin
+            except Exception:
+                pass
+        card["defcon"] = block
+    return card
 
 LLM_MODEL = "claude-haiku-4-5"  # $1/M in, $5/M out - /ask/usage estimates at these rates
 
@@ -432,13 +543,30 @@ def ctx_players(client, team_id, league_id, text, store) -> dict:
     tn = {t["id"]: t["short_name"] for t in bootstrap["teams"]}
     gw = client.next_gw()
 
-    named = _match_players(text, bootstrap)
+    rp = resolve_players(text, bootstrap)
+    named = rp["resolved"]
     teams = _team_index(bootstrap)
     n = _norm(text)
     named_teams = [tid for alias, tid in teams.items()
                    if re.search(rf"\b{re.escape(alias)}\b", n)]
 
     data: dict = {"gameweek": gw}
+    id2name = {e["id"]: e["web_name"] for e in bootstrap["elements"]}
+    tid2name = {t["id"]: t["short_name"] for t in bootstrap["teams"]}
+
+    # Never silently drop a named player: report what we couldn't resolve
+    # and any ambiguous surname with its candidates, so the LLM asks.
+    if rp["unresolved"]:
+        data["unresolved_names"] = rp["unresolved"]
+    if rp["ambiguous"]:
+        data["ambiguous_names"] = {
+            term: [{"name": id2name.get(pid, pid),
+                    "club": tid2name.get(
+                        next((e["team"] for e in bootstrap["elements"]
+                              if e["id"] == pid), None), "?")}
+                   for pid in pids]
+            for term, pids in rp["ambiguous"].items()
+        }
 
     # brief context (own team / plan) when available - unchanged behaviour
     brief = _cached_brief(team_id, league_id)
@@ -455,24 +583,33 @@ def ctx_players(client, team_id, league_id, text, store) -> dict:
     # heavy step (cached per gw) only when the question needs player data
     if named or named_teams:
         projmap = _ask_projections(client, store)
+        card_ids: set[int] = set(named)
+        team_cand: dict[int, list[int]] = {}
+        for tid in named_teams:
+            cand = sorted(
+                (e for e in bootstrap["elements"]
+                 if e["team"] == tid and e.get("status") == "a"),
+                key=lambda e: -((projmap.get(e["id"]) or [0])[0]),
+            )[:5]
+            team_cand[tid] = [e["id"] for e in cand]
+            card_ids.update(team_cand[tid])
+
+        # minutes + DefCon computed once for every card player
+        est = {pid: minutes.estimate_minutes(client, pid) for pid in card_ids}
+        dcm = defcon.DefConModel(client)
+        try:
+            dc = dcm.corrections(list(card_ids), est, horizon=1)
+        except Exception:
+            dc = {}
+        card = lambda pid: _player_card(client, pid, bootstrap, projmap, gw,
+                                        tn, est, dc, dcm)
         if named:
-            data["named_players"] = [
-                _player_card(client, pid, bootstrap, projmap, gw, tn)
-                for pid in named
-            ]
+            data["named_players"] = [card(pid) for pid in named]
         if named_teams:
-            by_team: dict[str, list] = {}
-            for tid in named_teams:
-                cand = sorted(
-                    (e for e in bootstrap["elements"]
-                     if e["team"] == tid and e.get("status") == "a"),
-                    key=lambda e: -(projmap.get(e["id"], [0])[0]),
-                )[:5]
-                by_team[tn[tid]] = [
-                    _player_card(client, e["id"], bootstrap, projmap, gw, tn)
-                    for e in cand
-                ]
-            data["team_options"] = by_team
+            data["team_options"] = {
+                tid2name[tid]: [card(pid) for pid in team_cand[tid]]
+                for tid in named_teams
+            }
 
     data["engine_pick_rule"] = (
         "the engine's pick among any set of players is the one with the "
@@ -487,7 +624,8 @@ def ctx_players(client, team_id, league_id, text, store) -> dict:
         "press-conference news beyond the status/news fields shown, "
         "betting odds, or general football opinion."
     )
-    if not brief and not named and not named_teams:
+    if (not brief and not named and not named_teams
+            and not rp["ambiguous"] and not rp["unresolved"]):
         data["unavailable"] = (
             "no team loaded and no players named - name players or teams "
             "to compare, or load your brief first"
@@ -505,14 +643,28 @@ FREE_SYSTEM_PROMPT = SYSTEM_PROMPT + (
     "- When the user names players or teams, DATA.named_players / "
     "DATA.team_options carry each player's REAL engine numbers "
     "(next_gw_projection, next5_projection_sum, fixtures_next3, venue, "
-    "opponent recent xGA, form, price, ownership). Give a direct "
-    "side-by-side and state the engine's pick per engine_pick_rule (the "
-    "highest next_gw_projection) with the margin. Use fixtures/venue/xGA "
-    "as context, never as numbers you compute.\n"
+    "opponent recent xGA, form, price, ownership, and the 'minutes' and "
+    "'defcon' blocks below). Give a direct side-by-side and state the "
+    "engine's pick per engine_pick_rule (the highest next_gw_projection) "
+    "with the margin. Use fixtures/venue/xGA as context, never as "
+    "numbers you compute.\n"
+    "- The 'minutes' block answers 'will he play': p_start (start "
+    "probability), expected_minutes, p60_plus (chance of 60+ mins), and "
+    "minutes_multiplier_on_projection. The 'defcon' block answers "
+    "defensive-contribution questions: expected_points_next_gw, the "
+    "CBIT (defenders) / CBIRT (mids & forwards) rate_per90, and the "
+    "threshold. Quote these verbatim; if thin_data or "
+    "is_prior_blended_thin is true, say the sample is thin.\n"
+    "- If DATA.unresolved_names is present, the user named those but the "
+    "engine could not find them - tell the user by name ('I couldn't "
+    "find a player matching X') and answer for the rest; never silently "
+    "omit them. If DATA.ambiguous_names is present, a surname matched "
+    "several players - list the candidates (name + club) and ask which "
+    "they mean rather than guessing.\n"
     "- Answer any question DATA supports - comparing players, whether a "
     "player is worth buying, a move from X to Y, best fixtures among "
-    "named players, best captain among named teams' options. A player "
-    "the user named but absent from DATA simply wasn't found - say so.\n"
+    "named players, best captain among named teams' options, who will "
+    "play, who is likely to hit DefCon.\n"
     "- Only if DATA genuinely can't support the question (outside FPL, or "
     "a stat we don't track) say plainly the engine doesn't have that and "
     "name one thing it does cover. Never deflect to an unrelated answer, "

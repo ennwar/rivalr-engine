@@ -45,3 +45,41 @@ def test_team_aliases_resolve():
     assert idx["liverpool"] == 11 and idx["liv"] == 11
     assert idx["chelsea"] == 6
     assert idx["city"] == 13 and idx["man city"] == 13
+
+
+# -- matcher robustness (item 1) ------------------------------------------
+
+ACCENT_BOOT = {
+    "teams": [{"id": 1, "name": "Arsenal", "short_name": "ARS"},
+              {"id": 2, "name": "Leeds", "short_name": "LEE"}],
+    "elements": [
+        {"id": 15, "web_name": "Ødegaard", "first_name": "Martin",
+         "second_name": "Ødegaard", "team": 1, "element_type": 3},
+        {"id": 20, "web_name": "N.Williams", "first_name": "Neco",
+         "second_name": "Williams", "team": 2, "element_type": 2},
+        {"id": 21, "web_name": "M.Williams", "first_name": "Max",
+         "second_name": "Williams", "team": 1, "element_type": 2},
+    ],
+}
+
+
+def test_accented_name_resolves_without_accent():
+    # the Ødegaard silent-drop bug: typing "Odegaard" must resolve
+    assert a.resolve_players("will Odegaard start", ACCENT_BOOT)["resolved"] == [15]
+    assert a.resolve_players("will Ødegaard start", ACCENT_BOOT)["resolved"] == [15]
+
+
+def test_unknown_name_is_flagged_not_dropped():
+    r = a.resolve_players("compare Messiah and Odegaard", ACCENT_BOOT)
+    assert 15 in r["resolved"]
+    assert "Messiah" in r["unresolved"]
+
+
+def test_ambiguous_surname_lists_candidates():
+    r = a.resolve_players("should I captain Williams", ACCENT_BOOT)
+    assert r["resolved"] == []                      # never guesses
+    assert set(r["ambiguous"].get("williams", [])) == {20, 21}
+
+
+def test_dotted_shortform_resolves_uniquely():
+    assert a.resolve_players("get N.Williams", ACCENT_BOOT)["resolved"] == [20]
