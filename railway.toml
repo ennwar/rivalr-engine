@@ -4,6 +4,20 @@
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
+# Only rebuild when BACKEND files actually change. Commits touching only
+# the Next.js frontend (web/, deployed on Vercel), docs, tests or
+# markdown no longer trigger a Railway image build - each such commit was
+# previously rebuilding BOTH backend services for nothing. Both services
+# read this file, so both are scoped identically.
+watchPatterns = [
+    "src/**",
+    "scripts/**",
+    "pyproject.toml",
+    "uv.lock",
+    "Dockerfile",
+    "docker-entrypoint.sh",
+    "railway.toml",
+]
 
 [deploy]
 healthcheckPath = "/health"

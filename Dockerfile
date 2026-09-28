@@ -13,11 +13,38 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# --- dependency layer -------------------------------------------------
+# Keyed ONLY on the dependency manifests: a code-only change reuses this
+# cached layer instead of re-installing the heavy ML stack
+# (pandas/numpy/xgboost/scikit-learn/highspy) on every deploy - the fix
+# that took code-change builds from minutes to seconds.
+#
+# This list MIRRORS pyproject.toml [project.dependencies] +
+# [project.optional-dependencies].api, pins included. Keep it in sync
+# with pyproject.toml: a missing/misversioned dep fails loudly at import
+# (the entrypoint imports rivalr before serving), so drift can't ship
+# silently. The package itself is installed --no-deps below.
 COPY pyproject.toml uv.lock README.md ./
+RUN pip install --no-cache-dir \
+        "requests>=2.31" \
+        "pandas>=2.3,<2.4" \
+        "numpy>=1.26,<3" \
+        "joblib==1.5.1" \
+        "xgboost==3.0.2" \
+        "scikit-learn==1.7.0" \
+        "highspy>=1.11.0" \
+        "fuzzywuzzy>=0.18" \
+        "fastapi>=0.110" \
+        "uvicorn[standard]>=0.29" \
+        "psycopg[binary]>=3.1" \
+        "anthropic>=0.40"
+
+# --- package layer (code only) ---------------------------------------
+# --no-deps: the stack above is authoritative and already installed, so
+# a change under src/ rebuilds ONLY this fast layer, not the ML stack.
 COPY src ./src
 COPY scripts ./scripts
-
-RUN pip install --no-cache-dir . fastapi "uvicorn[standard]" "psycopg[binary]" anthropic
+RUN pip install --no-cache-dir --no-deps .
 
 # Persistent state lives on the mounted volume (default /data)
 ENV RIVALR_VENDOR_DIR=/data/vendor \
