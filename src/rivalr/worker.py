@@ -17,6 +17,7 @@ Only genuinely new team/league pairs ever hit a cold solve.
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import sys
@@ -29,6 +30,21 @@ INTERVAL_S = 3600
 INTERVAL_NEAR_DEADLINE_S = 900
 PREWARM_WINDOW_H = 6
 MAX_SOLVES_PER_TICK = 8
+
+
+def _malloc_trim() -> None:
+    """Return freed heap back to the OS. A long-lived pandas/numpy/xgboost
+    process keeps glibc's arenas after each heavy project_all/solve pass,
+    so RSS climbs to the high-water mark and never falls - the runtime
+    cost driver. malloc_trim(0) forces glibc to release it. No-op off
+    glibc (e.g. musl/macOS); paired with MALLOC_ARENA_MAX=2 set on the
+    worker service to limit arena fragmentation in the first place.
+    Memory management only - changes nothing about the loop, the snapshot
+    timing, or what a snapshot collects."""
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
 
 
 def score_settled_gws() -> None:
@@ -116,6 +132,8 @@ def prewarm_tick() -> None:
                      mode, target or "-")
         except Exception:
             log.exception("prewarm failed for %s/%s (continuing)", team, league)
+        finally:
+            _malloc_trim()  # release this solve's heap before the next
     if force and marker is not None:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
@@ -189,6 +207,10 @@ def main() -> None:
             prewarm_tick()
         except Exception:
             log.exception("prewarm tick failed (continuing)")
+
+        # Release this tick's heap (snapshot + model-team + prewarm all
+        # ran project_all) back to the OS before idling for the interval.
+        _malloc_trim()
 
         # Tick faster near the deadline so window-fresh entries exist.
         interval = INTERVAL_S
